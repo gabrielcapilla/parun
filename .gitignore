@@ -1,0 +1,38 @@
+# Build artifacts
+*.a
+*.o
+*.so
+*.lib
+*.obj
+*.exe
+*.dll
+*.dylib
+
+# Nim artifacts
+nimcache/
+nimcache-*/
+config.nims
+nimble.paths
+*.nimble_link
+nimble.develop
+
+# Binary
+parun
+
+# Editor files
+*~
+*.swp
+*.swo
+
+# Log files
+*.log
+
+# OS generated files
+._*
+.Trashes
+Thumbs.db
+.DS_Store
+.DS_Store?
+.directory
+ehthumbs.db
+.Spotlight-V100
