@@ -1,6 +1,15 @@
 import std/[strformat, strutils, sets, tables]
 import types, utils, core
 
+const
+  BoxTopLeft = "╭"
+  BoxTopRight = "╮"
+  BoxBottomLeft = "╰"
+  BoxBottomRight = "╯"
+  BoxHor = "─"
+  BoxVer = "│"
+  ColorFrame = "\e[90m"
+
 type RenderResult* = tuple[frame: string, cursorX: int, cursorY: int]
 
 func renderRow(
@@ -36,66 +45,78 @@ func renderRow(
     result = content
 
 func renderUi*(state: AppState, termH, termW: int): RenderResult =
-  let listH = max(1, termH - 1)
+  let listH = max(1, termH - 2)
   let showDetails = state.showDetails and (termW >= 90)
+
   let listW =
     if showDetails:
       termW div 2
     else:
       termW
-  let detailW =
+  let detailTotalW =
     if showDetails:
-      termW - listW - 1
+      termW - listW
     else:
       0
+  let detailTextW = max(0, detailTotalW - 2)
 
-  var buffer = newStringOfCap(termH * termW + 1024)
+  var buffer = newStringOfCap(termH * termW + 2048)
 
   for r in 0 ..< listH:
     let idx = state.scroll + (listH - 1 - r)
-
     var line = ""
+
     if idx >= 0 and idx < state.visibleIndices.len:
       let realIdx = state.visibleIndices[idx]
       let pId = state.getPkgId(realIdx)
       let isSel = pId in state.selected
+      let rowContent = renderRow(state, realIdx, listW, idx == state.cursor, isSel)
 
-      line = renderRow(state, realIdx, listW, idx == state.cursor, isSel)
-
-      let vis = visibleWidth(line)
+      line.add(rowContent)
+      let vis = visibleWidth(rowContent)
       if vis < listW:
         line.add(repeat(" ", listW - vis))
     else:
-      line = repeat(" ", listW)
+      line.add(repeat(" ", listW))
 
     if showDetails:
-      line.add(fmt"{ColorPrompt}│{AnsiReset}")
-      if state.visibleIndices.len > 0:
-        let curIdx = state.visibleIndices[state.cursor]
-        let pId = state.getPkgId(curIdx)
-        if state.detailsCache.hasKey(pId):
-          let dLines = state.detailsCache[pId].splitLines
-          let scrollOffset = state.detailScroll
-          let effectiveR = r + scrollOffset
-
-          if effectiveR < dLines.len:
-            let dLine = dLines[effectiveR]
-            let cleanLine = dLine.replace("\t", "  ")
-            if cleanLine.len > detailW:
-              line.add(truncate(cleanLine, detailW))
-            else:
-              line.add(cleanLine & repeat(" ", detailW - cleanLine.len))
-          else:
-            line.add(repeat(" ", detailW))
-        else:
-          if r == 0:
-            line.add("...")
-          else:
-            line.add(repeat(" ", detailW))
+      if r == 0:
+        line.add(
+          fmt"{ColorFrame}{BoxTopLeft}{repeat(BoxHor, detailTextW)}{BoxTopRight}{AnsiReset}"
+        )
+      elif r == listH - 1:
+        line.add(
+          fmt"{ColorFrame}{BoxBottomLeft}{repeat(BoxHor, detailTextW)}{BoxBottomRight}{AnsiReset}"
+        )
       else:
-        line.add(repeat(" ", detailW))
+        line.add(fmt"{ColorFrame}{BoxVer}{AnsiReset}")
+        let contentRowIndex = r - 1
+        var textContent = ""
+        if state.visibleIndices.len > 0:
+          let curIdx = state.visibleIndices[state.cursor]
+          let pId = state.getPkgId(curIdx)
+          if state.detailsCache.hasKey(pId):
+            let dLines = state.detailsCache[pId].splitLines
+            let scrollOffset = state.detailScroll
+            let effectiveDetailIdx = contentRowIndex + scrollOffset
+            if effectiveDetailIdx < dLines.len:
+              textContent = dLines[effectiveDetailIdx].replace("\t", "  ")
+          else:
+            if contentRowIndex == 0:
+              textContent = "Cargando..."
 
-    buffer.add(line & "\n")
+        let visLen = visibleWidth(textContent)
+        if visLen > detailTextW:
+          line.add(truncate(textContent, detailTextW))
+        else:
+          line.add(textContent & repeat(" ", detailTextW - visLen))
+        line.add(fmt"{ColorFrame}{BoxVer}{AnsiReset}")
+
+    buffer.add(line)
+    buffer.add("\n")
+
+  buffer.add(fmt"{ColorFrame}{repeat(BoxHor, termW)}{AnsiReset}")
+  buffer.add("\n")
 
   let pkgCountStr =
     if state.pkgs.len == 0:
@@ -118,21 +139,17 @@ func renderUi*(state: AppState, termH, termW: int): RenderResult =
   let leftSide = fmt"{ColorPrompt}>{AnsiReset} {state.searchBuffer}"
 
   let promptVisualLen = 2
-
   let textBeforeCursor = state.searchBuffer[0 ..< state.searchCursor]
   let inputVisualLen = visibleWidth(textBeforeCursor)
-
   let cursorVisualX = promptVisualLen + inputVisualLen
-
-  let rightSide = fmt"{statusPrefix}{modeStr} {pkgCountStr}"
 
   let leftSideVisTotal =
     visibleWidth(fmt"{ColorPrompt}>{AnsiReset} {state.searchBuffer}")
+  let rightSide = fmt"{statusPrefix}{modeStr} {pkgCountStr}"
   let rightLen = visibleWidth(rightSide)
+
   let spacing = max(0, termW - leftSideVisTotal - rightLen)
 
-  let statusLine = leftSide & repeat(" ", spacing) & rightSide
-
-  buffer.add(statusLine)
+  buffer.add(leftSide & repeat(" ", spacing) & rightSide)
 
   return (frame: buffer, cursorX: cursorVisualX, cursorY: termH)

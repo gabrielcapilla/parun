@@ -192,16 +192,11 @@ proc main() =
 
     if state.needsRedraw:
       let (frame, cx, cy) = renderUi(state, terminalHeight(), terminalWidth())
-
       stdout.write("\e[?25l")
-
       setCursorPos(0, 0)
       stdout.write(frame)
-
       setCursorPos(cx, cy)
-
       stdout.write("\e[?25h")
-
       stdout.flushFile()
       state.needsRedraw = false
 
@@ -216,7 +211,8 @@ proc main() =
     if ready.len > 0:
       let k = readInputSafe()
       if k != '\0':
-        state = update(state, Msg(kind: MsgInput, key: k), max(1, terminalHeight() - 1))
+        let listH = max(1, terminalHeight() - 2)
+        state = update(state, Msg(kind: MsgInput, key: k), listH)
 
         let isEditing =
           (k.ord >= 32 and k.ord <= 126) or k == KeyBack or k == KeyBackspace
@@ -233,7 +229,8 @@ proc main() =
             requestSearch(effectiveQuery, state.searchId)
 
     for msg in pollWorkerMessages():
-      state = update(state, msg, max(1, terminalHeight() - 1))
+      let listH = max(1, terminalHeight() - 2)
+      state = update(state, msg, listH)
 
 if isMainModule:
   main()
