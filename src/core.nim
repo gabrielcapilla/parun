@@ -58,11 +58,11 @@ func filterIndices(state: AppState, query: string): seq[int32] =
   for item in scored:
     result.add(item.idx)
 
-func newState*(): AppState =
+func newState*(initialMode: SearchMode, initialShowDetails: bool): AppState =
   AppState(
     pkgs: @[],
     visibleIndices: @[],
-    stringPool: newStringOfCap(1024 * 1024),
+    stringPool: newStringOfCap(4 * 1024 * 1024),
     repoList: @[],
     localPkgCount: 0,
     localPoolLen: 0,
@@ -72,9 +72,9 @@ func newState*(): AppState =
     cursor: 0,
     scroll: 0,
     searchBuffer: "",
-    searchMode: ModeLocal,
+    searchMode: initialMode,
     isSearching: false,
-    showDetails: true,
+    showDetails: initialShowDetails,
   )
 
 func update*(state: AppState, msg: Msg, listHeight: int): AppState =
@@ -97,7 +97,6 @@ func update*(state: AppState, msg: Msg, listHeight: int): AppState =
         result.searchMode = ModeHybrid
       else:
         result.searchMode = ModeLocal
-
         if result.localPkgCount > 0:
           result.pkgs.setLen(result.localPkgCount)
           result.stringPool.setLen(result.localPoolLen)
@@ -141,7 +140,6 @@ func update*(state: AppState, msg: Msg, listHeight: int): AppState =
     elif k.ord >= 32 and k.ord <= 126:
       result.searchBuffer.insert($k, result.searchCursor)
       result.searchCursor.inc()
-
       result.visibleIndices = filterIndices(result, result.searchBuffer)
       result.cursor = 0
     elif k == KeyF1:
@@ -158,18 +156,19 @@ func update*(state: AppState, msg: Msg, listHeight: int): AppState =
     else:
       result.scroll = 0
   of MsgSearchResults:
-    if msg.searchId > 0:
-      if msg.searchId != result.searchId:
+    if msg.isAppend:
+      if msg.searchId > 0 and msg.searchId != result.searchId:
         return result
 
-      if result.localPkgCount > 0:
-        result.pkgs.setLen(result.localPkgCount)
-        result.stringPool.setLen(result.localPoolLen)
-        result.repoList.setLen(result.localRepoCount)
-      else:
-        result.pkgs = @[]
-        result.stringPool = ""
-        result.repoList = @[]
+      if msg.searchId > 0:
+        if result.localPkgCount > 0:
+          result.pkgs.setLen(result.localPkgCount)
+          result.stringPool.setLen(result.localPoolLen)
+          result.repoList.setLen(result.localRepoCount)
+        else:
+          result.pkgs = @[]
+          result.stringPool = ""
+          result.repoList = @[]
 
       var remoteRepoMap = newSeq[uint8](msg.repos.len)
       for i, r in msg.repos:
@@ -193,6 +192,11 @@ func update*(state: AppState, msg: Msg, listHeight: int): AppState =
         newP.nameOffset += baseOffset
         newP.verOffset += baseOffset
         result.pkgs.add(newP)
+
+      if msg.searchId == 0:
+        result.localPkgCount = result.pkgs.len
+        result.localPoolLen = result.stringPool.len
+        result.localRepoCount = result.repoList.len
 
       result.visibleIndices = filterIndices(result, result.searchBuffer)
 

@@ -59,6 +59,7 @@ type
       poolData*: string
       repos*: seq[string]
       searchId*: int
+      isAppend*: bool
     of MsgDetailsLoaded:
       pkgId*: string
       content*: string

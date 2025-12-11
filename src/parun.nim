@@ -1,4 +1,4 @@
-import std/[terminal, os, termios, selectors, posix, strutils, sets, tables]
+import std/[terminal, os, termios, selectors, posix, strutils, sets, tables, parseopt]
 import types, core, tui, pkgManager
 
 proc initRawMode(): Termios =
@@ -80,12 +80,32 @@ proc readInputSafe(): char =
   return char(b1)
 
 proc main() =
+  var
+    startMode = ModeLocal
+    startShowDetails = true
+
+  var p = initOptParser()
+
+  for kind, key, val in p.getopt():
+    case kind
+    of cmdLongOption, cmdShortOption:
+      case key
+      of "aur", "a":
+        startMode = ModeHybrid
+      of "noinfo", "n":
+        startShowDetails = false
+      else:
+        discard
+    else:
+      discard
+
   let origTerm = initRawMode()
   stdout.write("\e[?1049h\e[?25l")
   stdout.flushFile()
 
   initPackageManager()
-  var state = newState()
+
+  var state = newState(startMode, startShowDetails)
   requestLoadAll()
 
   let selector = newSelector[int]()
@@ -144,20 +164,16 @@ proc main() =
     if ready.len > 0:
       let k = readInputSafe()
       if k != '\0':
-        let oldMode = state.searchMode
         state = update(state, Msg(kind: MsgInput, key: k), max(1, terminalHeight() - 1))
 
         let isEditing =
           (k.ord >= 32 and k.ord <= 126) or k == KeyBack or k == KeyBackspace
         let isToggle = (k == KeyCtrlA)
-
         let shouldCheckNetwork = isEditing or isToggle
 
         if shouldCheckNetwork:
           let hasAurPrefix = state.searchBuffer.startsWith("aur/")
-
           let effectiveQuery = getEffectiveQuery(state.searchBuffer)
-
           let active = (state.searchMode == ModeHybrid) or hasAurPrefix
 
           if active and effectiveQuery.len > 2:

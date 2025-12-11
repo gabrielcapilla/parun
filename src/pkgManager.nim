@@ -1,4 +1,4 @@
-import std/[os, osproc, strutils, strformat, tables]
+import std/[os, osproc, strutils, strformat, tables, streams]
 import types, utils
 
 type
@@ -23,72 +23,60 @@ var
   resChan: Channel[WorkerRes]
   workerThread: Thread[string]
 
-proc parseSyncDb(
-    lines: string, installedCache: Table[string, string]
-): (seq[CompactPackage], string, seq[string]) =
-  var
-    pkgs = newSeqOfCap[CompactPackage](50000)
-    pool = newStringOfCap(2 * 1024 * 1024)
-    repos: seq[string] = @[]
-    repoMap = initTable[string, uint8]()
+proc parseSingleLine(
+    line: string,
+    pool: var string,
+    repoMap: var Table[string, uint8],
+    repos: var seq[string],
+    installedMap: Table[string, string],
+): CompactPackage =
+  var i = 0
+  let L = line.len
 
-  for rawLine in lines.splitLines:
-    if rawLine.len == 0:
-      continue
-    let line = stripAnsi(rawLine)
-    if line.len == 0:
-      continue
-
-    var i = 0
-    let L = line.len
-
-    let rStart = i
-    while i < L and line[i] != ' ':
-      inc(i)
-    if i >= L:
-      continue
-    let repoName = line[rStart ..< i]
+  let rStart = i
+  while i < L and line[i] != ' ':
     inc(i)
+  if i >= L:
+    return
+  let repoName = line[rStart ..< i]
+  inc(i)
 
-    let nStart = i
-    while i < L and line[i] != ' ':
-      inc(i)
-    if i >= L:
-      continue
-    let nameLen = i - nStart
-    let nameOffset = int32(pool.len)
-    pool.add(line[nStart ..< i])
+  let nStart = i
+  while i < L and line[i] != ' ':
     inc(i)
+  if i >= L:
+    return
+  let nameLen = i - nStart
+  let nameStr = line[nStart ..< i]
+  let nameOffset = int32(pool.len)
+  pool.add(nameStr)
+  inc(i)
 
-    let vStart = i
-    while i < L and line[i] != ' ':
-      inc(i)
-    let verLen = i - vStart
-    let verOffset = int32(pool.len)
-    pool.add(line[vStart ..< i])
+  let vStart = i
+  while i < L and line[i] != ' ':
+    inc(i)
+  let verLen = i - vStart
+  let verOffset = int32(pool.len)
+  pool.add(line[vStart ..< i])
 
-    var isInst = false
-    if installedCache.hasKey(line[nStart ..< nStart + nameLen]):
-      isInst = true
-    elif line.find("[installed]") > 0 or line.find("[instalado]") > 0:
-      isInst = true
+  var isInst = false
+  if installedMap.hasKey(nameStr):
+    isInst = true
+  elif line.find("[installed]") > 0 or line.find("[instalado]") > 0:
+    isInst = true
 
-    if not repoMap.hasKey(repoName):
-      repoMap[repoName] = uint8(repos.len)
-      repos.add(repoName)
+  if not repoMap.hasKey(repoName):
+    repoMap[repoName] = uint8(repos.len)
+    repos.add(repoName)
 
-    pkgs.add(
-      CompactPackage(
-        repoIdx: repoMap[repoName],
-        nameOffset: nameOffset,
-        nameLen: int16(nameLen),
-        verOffset: verOffset,
-        verLen: int16(verLen),
-        isInstalled: isInst,
-      )
-    )
-
-  return (pkgs, pool, repos)
+  result = CompactPackage(
+    repoIdx: repoMap[repoName],
+    nameOffset: nameOffset,
+    nameLen: int16(nameLen),
+    verOffset: verOffset,
+    verLen: int16(verLen),
+    isInstalled: isInst,
+  )
 
 proc parseSearchResults(lines: string): (seq[CompactPackage], string, seq[string]) =
   var
@@ -155,14 +143,53 @@ proc workerLoop(tool: string) {.thread.} =
           if parts.len > 1:
             instMap[parts[0]] = parts[1]
 
-        let (outp, code) = execCmdEx("pacman -Sl")
-        if code == 0:
-          let (pkgs, pool, repos) = parseSyncDb(outp, instMap)
+        var p = startProcess("pacman", args = ["-Sl"], options = {poUsePath})
+        var outp = p.outputStream
+        var line = ""
+
+        var batchPkgs = newSeqOfCap[CompactPackage](1000)
+        var batchPool = newStringOfCap(32 * 1024)
+        var batchRepos: seq[string] = @[]
+        var batchRepoMap = initTable[string, uint8]()
+
+        while outp.readLine(line):
+          if line.len == 0:
+            continue
+
+          let pkg = parseSingleLine(line, batchPool, batchRepoMap, batchRepos, instMap)
+          if pkg.nameLen > 0:
+            batchPkgs.add(pkg)
+
+          if batchPkgs.len >= 500:
+            resChan.send(
+              Msg(
+                kind: MsgSearchResults,
+                packedPkgs: batchPkgs,
+                poolData: batchPool,
+                repos: batchRepos,
+                searchId: 0,
+                isAppend: true,
+              )
+            )
+
+            batchPkgs = newSeqOfCap[CompactPackage](1000)
+            batchPool = newStringOfCap(32 * 1024)
+            batchRepos = @[]
+            batchRepoMap = initTable[string, uint8]()
+
+        if batchPkgs.len > 0:
           resChan.send(
-            Msg(kind: MsgSearchResults, packedPkgs: pkgs, poolData: pool, repos: repos)
+            Msg(
+              kind: MsgSearchResults,
+              packedPkgs: batchPkgs,
+              poolData: batchPool,
+              repos: batchRepos,
+              searchId: 0,
+              isAppend: true,
+            )
           )
-        else:
-          resChan.send(Msg(kind: MsgError, errMsg: "Failed 'pacman -Sl'."))
+
+        p.close()
       of ReqSearch:
         if tool != "pacman" and req.query.len > 2:
           let cmd = fmt"{tool} -Ss --aur {sanitizeShell(req.query)}"
@@ -177,6 +204,7 @@ proc workerLoop(tool: string) {.thread.} =
                 poolData: pool,
                 repos: repos,
                 searchId: req.searchId,
+                isAppend: true,
               )
             )
       of ReqDetails:
@@ -233,7 +261,6 @@ proc pollWorkerMessages*(): seq[Msg] =
 proc installPackages*(names: seq[string]): int =
   if names.len == 0:
     return 0
-
   let tool =
     if findExe("paru").len > 0:
       "paru"
@@ -241,19 +268,16 @@ proc installPackages*(names: seq[string]): int =
       "yay"
     else:
       "pacman"
-
   var cmd = ""
   if tool == "pacman":
     cmd = "sudo pacman -S "
   else:
     cmd = tool & " -S "
-
   return execCmd(cmd & names.join(" "))
 
 proc uninstallPackages*(names: seq[string]): int =
   if names.len == 0:
     return 0
-
   let tool =
     if findExe("paru").len > 0:
       "paru"
@@ -261,11 +285,9 @@ proc uninstallPackages*(names: seq[string]): int =
       "yay"
     else:
       "pacman"
-
   var cmd = ""
   if tool == "pacman":
     cmd = "sudo pacman -R "
   else:
     cmd = tool & " -R "
-
   return execCmd(cmd & names.join(" "))
