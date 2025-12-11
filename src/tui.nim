@@ -75,14 +75,12 @@ func renderUi*(state: AppState, termH, termW: int): RenderResult =
         let pId = state.getPkgId(curIdx)
         if state.detailsCache.hasKey(pId):
           let dLines = state.detailsCache[pId].splitLines
-
           let scrollOffset = state.detailScroll
           let effectiveR = r + scrollOffset
 
           if effectiveR < dLines.len:
             let dLine = dLines[effectiveR]
             let cleanLine = dLine.replace("\t", "  ")
-
             if cleanLine.len > detailW:
               line.add(truncate(cleanLine, detailW))
             else:
@@ -110,25 +108,30 @@ func renderUi*(state: AppState, termH, termW: int): RenderResult =
     statusPrefix.add(fmt"{ColorSel}[{state.selected.len}]{AnsiReset} ")
 
   let modeStr =
-    if state.searchMode == ModeLocal:
+    if state.viewingSelection:
+      fmt"{ColorModeReview}[REVISIÓN]{AnsiReset}"
+    elif state.searchMode == ModeLocal:
       fmt"{ColorModeLocal}[Local]{AnsiReset}"
     else:
       fmt"{ColorModeHybrid}[Local+AUR]{AnsiReset}"
 
-  var displayBuffer = state.searchBuffer
-  if state.searchCursor >= 0 and state.searchCursor <= state.searchBuffer.len:
-    displayBuffer.insert("_", state.searchCursor)
+  let leftSide = fmt"{ColorPrompt}>{AnsiReset} {state.searchBuffer}"
 
-  let leftSide = fmt"{ColorPrompt}>{AnsiReset} {displayBuffer}"
-  let leftLen = visibleWidth(leftSide)
+  let promptVisualLen = 2
+
+  let textBeforeCursor = state.searchBuffer[0 ..< state.searchCursor]
+  let inputVisualLen = visibleWidth(textBeforeCursor)
+
+  let cursorVisualX = promptVisualLen + inputVisualLen
+
   let rightSide = fmt"{statusPrefix}{modeStr} {pkgCountStr}"
+
+  let leftSideVisTotal =
+    visibleWidth(fmt"{ColorPrompt}>{AnsiReset} {state.searchBuffer}")
   let rightLen = visibleWidth(rightSide)
+  let spacing = max(0, termW - leftSideVisTotal - rightLen)
 
-  let spacing = max(0, termW - leftLen - rightLen)
   let statusLine = leftSide & repeat(" ", spacing) & rightSide
-
-  let promptVisLen = 2
-  let cursorVisualX = promptVisLen
 
   buffer.add(statusLine)
 

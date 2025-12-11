@@ -58,6 +58,16 @@ func filterIndices(state: AppState, query: string): seq[int32] =
   for item in scored:
     result.add(item.idx)
 
+func filterBySelection(state: AppState): seq[int32] =
+  result = newSeqOfCap[int32](state.selected.len)
+  if state.selected.len == 0:
+    return
+
+  for i in 0 ..< state.pkgs.len:
+    let id = state.getPkgId(int32(i))
+    if id in state.selected:
+      result.add(int32(i))
+
 func newState*(initialMode: SearchMode, initialShowDetails: bool): AppState =
   AppState(
     pkgs: @[],
@@ -76,6 +86,7 @@ func newState*(initialMode: SearchMode, initialShowDetails: bool): AppState =
     isSearching: false,
     showDetails: initialShowDetails,
     detailScroll: 0,
+    viewingSelection: false,
   )
 
 func update*(state: AppState, msg: Msg, listHeight: int): AppState =
@@ -94,6 +105,12 @@ func update*(state: AppState, msg: Msg, listHeight: int): AppState =
       if result.visibleIndices.len > 0:
         result.cursor = max(0, result.cursor - 1)
         result.detailScroll = 0
+    elif k == KeyLeft:
+      if result.searchCursor > 0:
+        result.searchCursor.dec()
+    elif k == KeyRight:
+      if result.searchCursor < result.searchBuffer.len:
+        result.searchCursor.inc()
     elif k == KeyPageUp:
       if result.visibleIndices.len > 0:
         result.cursor = min(result.visibleIndices.len - 1, result.cursor + listHeight)
@@ -112,6 +129,15 @@ func update*(state: AppState, msg: Msg, listHeight: int): AppState =
         result.cursor = 0
         result.scroll = 0
         result.detailScroll = 0
+    elif k == KeyDetailUp:
+      result.detailScroll = max(0, result.detailScroll - 1)
+    elif k == KeyDetailDown:
+      if result.visibleIndices.len > 0:
+        let id = result.getPkgId(result.visibleIndices[result.cursor])
+        if result.detailsCache.hasKey(id):
+          let lines = result.detailsCache[id].countLines()
+          if result.detailScroll < lines - 1:
+            result.detailScroll.inc()
     elif k == KeyEnter:
       result.shouldInstall = true
     elif k == KeyCtrlA:
@@ -125,17 +151,27 @@ func update*(state: AppState, msg: Msg, listHeight: int): AppState =
           result.repoList.setLen(result.localRepoCount)
           result.visibleIndices = filterIndices(result, result.searchBuffer)
           result.cursor = 0
+    elif k == KeyCtrlS:
+      result.viewingSelection = not result.viewingSelection
+      result.cursor = 0
+      result.scroll = 0
+      if result.viewingSelection:
+        result.visibleIndices = filterBySelection(result)
+      else:
+        result.visibleIndices = filterIndices(result, result.searchBuffer)
     elif k == KeyEsc:
-      if result.searchBuffer.len > 0:
+      if result.viewingSelection:
+        result.viewingSelection = false
+        result.visibleIndices = filterIndices(result, result.searchBuffer)
+        result.cursor = 0
+      elif result.searchBuffer.len > 0:
         result.searchBuffer = ""
         result.searchCursor = 0
         result.searchMode = ModeLocal
-
         if result.localPkgCount > 0:
           result.pkgs.setLen(result.localPkgCount)
           result.stringPool.setLen(result.localPoolLen)
           result.repoList.setLen(result.localRepoCount)
-
         result.visibleIndices = filterIndices(result, "")
         result.cursor = 0
         result.scroll = 0
@@ -151,15 +187,20 @@ func update*(state: AppState, msg: Msg, listHeight: int): AppState =
         if result.cursor < result.visibleIndices.len - 1:
           result.cursor.inc()
     elif k == KeyBack or k == KeyBackspace:
+      if result.viewingSelection:
+        result.viewingSelection = false
+
       if result.searchCursor > 0:
         result.searchBuffer.delete(result.searchCursor - 1 .. result.searchCursor - 1)
         result.searchCursor.dec()
         result.visibleIndices = filterIndices(result, result.searchBuffer)
         result.cursor = 0
-
         if result.searchBuffer.len == 0:
           result.searchMode = ModeLocal
     elif k.ord >= 32 and k.ord <= 126:
+      if result.viewingSelection:
+        result.viewingSelection = false
+
       result.searchBuffer.insert($k, result.searchCursor)
       result.searchCursor.inc()
       result.visibleIndices = filterIndices(result, result.searchBuffer)
@@ -220,7 +261,8 @@ func update*(state: AppState, msg: Msg, listHeight: int): AppState =
         result.localPoolLen = result.stringPool.len
         result.localRepoCount = result.repoList.len
 
-      result.visibleIndices = filterIndices(result, result.searchBuffer)
+      if not result.viewingSelection:
+        result.visibleIndices = filterIndices(result, result.searchBuffer)
 
       if result.visibleIndices.len > 0:
         result.cursor = clamp(result.cursor, 0, result.visibleIndices.len - 1)
@@ -235,12 +277,12 @@ func update*(state: AppState, msg: Msg, listHeight: int): AppState =
       result.pkgs = msg.packedPkgs
       result.stringPool = msg.poolData
       result.repoList = msg.repos
-
       result.localPkgCount = result.pkgs.len
       result.localPoolLen = result.stringPool.len
       result.localRepoCount = result.repoList.len
 
-      result.visibleIndices = filterIndices(result, result.searchBuffer)
+      if not result.viewingSelection:
+        result.visibleIndices = filterIndices(result, result.searchBuffer)
       result.cursor = 0
       result.scroll = 0
 

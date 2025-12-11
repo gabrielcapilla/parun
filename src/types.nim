@@ -17,8 +17,12 @@ const
   KeyHome* = char(25)
   KeyEnd* = char(26)
 
+  KeyDetailUp* = char(28)
+  KeyDetailDown* = char(29)
+
   KeyCtrlR* = char(18)
   KeyCtrlA* = char(1)
+  KeyCtrlS* = char(19)
   KeyF1* = char(133)
 
   AnsiReset* = "\e[0m"
@@ -34,6 +38,7 @@ const
 
   ColorModeLocal* = "\e[1;32m"
   ColorModeHybrid* = "\e[1;35m"
+  ColorModeReview* = "\e[1;33m"
 
 type
   CompactPackage* = object
@@ -92,6 +97,7 @@ type
     searchCursor*: int
 
     searchMode*: SearchMode
+    viewingSelection*: bool
 
     isSearching*: bool
     searchId*: int

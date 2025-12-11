@@ -11,6 +11,10 @@ proc initRawMode(): Termios =
   var flags = fcntl(STDIN_FILENO, F_GETFL, 0)
   discard fcntl(STDIN_FILENO, F_SETFL, flags or O_NONBLOCK)
 
+proc restoreBlockingMode() =
+  var flags = fcntl(STDIN_FILENO, F_GETFL, 0)
+  discard fcntl(STDIN_FILENO, F_SETFL, flags and not O_NONBLOCK)
+
 proc sleepMicros(us: int) =
   var req = Timespec(tv_sec: Time(0), tv_nsec: us * 1000)
   var rem: Timespec
@@ -39,6 +43,8 @@ proc readInputSafe(): char =
     return KeyCtrlR
   if b1 == 1:
     return KeyCtrlA
+  if b1 == 19:
+    return KeyCtrlS
 
   if b1 == 27:
     var retries = 0
@@ -57,6 +63,7 @@ proc readInputSafe(): char =
       let b3 = readByte()
       if b3 == -1:
         return '\0'
+
       case b3
       of ord('A'):
         return KeyUp
@@ -79,6 +86,19 @@ proc readInputSafe(): char =
         let b4 = readByte()
         if b4 == ord('~'):
           return KeyPageDown
+        return '\0'
+      of ord('1'):
+        let b4 = readByte()
+        let b5 = readByte()
+        let b6 = readByte()
+        if b4 == ord(';') and b5 == ord('5'):
+          case b6
+          of ord('A'):
+            return KeyDetailUp
+          of ord('B'):
+            return KeyDetailDown
+          else:
+            return '\0'
         return '\0'
       else:
         return '\0'
@@ -103,7 +123,6 @@ proc main() =
     startShowDetails = true
 
   var p = initOptParser()
-
   for kind, key, val in p.getopt():
     case kind
     of cmdLongOption, cmdShortOption:
@@ -133,31 +152,39 @@ proc main() =
     selector.close()
     stdout.write("\e[?1049l\e[?25h" & AnsiReset)
     discard tcSetAttr(STDIN_FILENO, TCSAFLUSH, addr origTerm)
+    restoreBlockingMode()
     stdout.flushFile()
 
   while not state.shouldQuit:
     if state.shouldInstall or state.shouldUninstall:
       var targets: seq[string] = @[]
-
       if state.selected.len > 0:
         for s in state.selected:
-          targets.add(s)
+          if state.shouldInstall:
+            targets.add(s)
+          else:
+            if s.contains('/'):
+              targets.add(s.split('/')[1])
+            else:
+              targets.add(s)
       elif state.visibleIndices.len > 0:
         let idx = state.visibleIndices[state.cursor]
         let p = state.pkgs[int(idx)]
-        targets.add(state.getRepo(p) & "/" & state.getName(p))
+        if state.shouldInstall:
+          targets.add(state.getRepo(p) & "/" & state.getName(p))
+        else:
+          targets.add(state.getName(p))
 
       if targets.len > 0:
         stdout.write("\e[?1049l\e[?25h")
-        discard tcSetAttr(STDIN_FILENO, TCSAFLUSH, addr origTerm)
         stdout.flushFile()
-
+        discard tcSetAttr(STDIN_FILENO, TCSAFLUSH, addr origTerm)
+        restoreBlockingMode()
         let code =
           if state.shouldInstall:
             installPackages(targets)
           else:
             uninstallPackages(targets)
-
         quit(code)
       else:
         state.shouldInstall = false
@@ -165,9 +192,16 @@ proc main() =
 
     if state.needsRedraw:
       let (frame, cx, cy) = renderUi(state, terminalHeight(), terminalWidth())
+
+      stdout.write("\e[?25l")
+
       setCursorPos(0, 0)
       stdout.write(frame)
+
       setCursorPos(cx, cy)
+
+      stdout.write("\e[?25h")
+
       stdout.flushFile()
       state.needsRedraw = false
 
@@ -189,7 +223,7 @@ proc main() =
         let isToggle = (k == KeyCtrlA)
         let shouldCheckNetwork = isEditing or isToggle
 
-        if shouldCheckNetwork:
+        if shouldCheckNetwork and not state.viewingSelection:
           let hasAurPrefix = state.searchBuffer.startsWith("aur/")
           let effectiveQuery = getEffectiveQuery(state.searchBuffer)
           let active = (state.searchMode == ModeHybrid) or hasAurPrefix
