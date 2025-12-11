@@ -1,6 +1,5 @@
 import std/[strutils, sets, tables, algorithm, math]
-import types
-import simd
+import types, simd
 
 template getName*(state: AppState, p: CompactPackage): string =
   state.stringPool[int(p.nameOffset) ..< int(p.nameOffset) + int(p.nameLen)]
@@ -68,7 +67,9 @@ func filterBySelection(state: AppState): seq[int32] =
     if id in state.selected:
       result.add(int32(i))
 
-func newState*(initialMode: SearchMode, initialShowDetails: bool): AppState =
+func newState*(
+    initialMode: SearchMode, initialShowDetails: bool, useVim: bool
+): AppState =
   AppState(
     pkgs: @[],
     visibleIndices: @[],
@@ -82,12 +83,110 @@ func newState*(initialMode: SearchMode, initialShowDetails: bool): AppState =
     cursor: 0,
     scroll: 0,
     searchBuffer: "",
+    commandBuffer: "",
     searchMode: initialMode,
     isSearching: false,
     showDetails: initialShowDetails,
     detailScroll: 0,
     viewingSelection: false,
+    inputMode: if useVim: ModeVimNormal else: ModeStandard,
   )
+
+func toggleSelection(state: var AppState) =
+  if state.visibleIndices.len > 0:
+    let id = state.getPkgId(state.visibleIndices[state.cursor])
+    if id in state.selected:
+      state.selected.excl(id)
+    else:
+      state.selected.incl(id)
+    if state.cursor < state.visibleIndices.len - 1:
+      state.cursor.inc()
+
+func handleVimCommand(state: var AppState, k: char) =
+  case k
+  of KeyEnter:
+    let cmd = state.commandBuffer.strip()
+    if cmd == "q" or cmd == "q!":
+      state.shouldQuit = true
+    else:
+      state.commandBuffer = ""
+      state.inputMode = ModeVimNormal
+  of KeyEsc:
+    state.commandBuffer = ""
+    state.inputMode = ModeVimNormal
+  of KeyBack, KeyBackspace:
+    if state.commandBuffer.len > 0:
+      state.commandBuffer.setLen(state.commandBuffer.len - 1)
+    else:
+      state.inputMode = ModeVimNormal
+  elif k.ord >= 32 and k.ord <= 126:
+    state.commandBuffer.add(k)
+  else:
+    discard
+
+func handleVimNormal(state: var AppState, k: char, listHeight: int) =
+  case k
+  of 'j', KeyDown:
+    if state.visibleIndices.len > 0:
+      state.cursor = max(0, state.cursor - 1)
+      state.detailScroll = 0
+  of 'k', KeyUp:
+    if state.visibleIndices.len > 0:
+      state.cursor = min(state.visibleIndices.len - 1, state.cursor + 1)
+      state.detailScroll = 0
+  of 'g', KeyHome:
+    if state.visibleIndices.len > 0:
+      state.cursor = state.visibleIndices.len - 1
+      state.scroll = max(0, state.cursor - listHeight + 1)
+      state.detailScroll = 0
+  of 'G', KeyEnd:
+    if state.visibleIndices.len > 0:
+      state.cursor = 0
+      state.scroll = 0
+      state.detailScroll = 0
+  of KeyCtrlU, KeyPageUp:
+    if state.visibleIndices.len > 0:
+      state.cursor = min(state.visibleIndices.len - 1, state.cursor + listHeight)
+      state.detailScroll = 0
+  of KeyCtrlD, KeyPageDown:
+    if state.visibleIndices.len > 0:
+      state.cursor = max(0, state.cursor - listHeight)
+      state.detailScroll = 0
+  of KeyCtrlY:
+    state.detailScroll = max(0, state.detailScroll - 1)
+  of KeyCtrlE:
+    if state.visibleIndices.len > 0:
+      let id = state.getPkgId(state.visibleIndices[state.cursor])
+      if state.detailsCache.hasKey(id):
+        let lines = state.detailsCache[id].countLines()
+        if state.detailScroll < lines - 1:
+          state.detailScroll.inc()
+  of 'i':
+    state.inputMode = ModeVimInsert
+  of '/':
+    state.searchBuffer = ""
+    state.searchCursor = 0
+    state.visibleIndices = filterIndices(state, "")
+    state.inputMode = ModeVimInsert
+  of ':':
+    state.commandBuffer = ""
+    state.inputMode = ModeVimCommand
+  of KeySpace:
+    toggleSelection(state)
+  of 'x':
+    state.shouldUninstall = true
+  of KeyEnter:
+    state.shouldInstall = true
+  of KeyEsc:
+    if state.searchBuffer.len > 0:
+      state.searchBuffer = ""
+      state.searchCursor = 0
+      state.visibleIndices = filterIndices(state, "")
+    elif state.viewingSelection:
+      state.viewingSelection = false
+      state.visibleIndices = filterIndices(state, "")
+  else:
+    discard
 
 func update*(state: AppState, msg: Msg, listHeight: int): AppState =
   result = state
@@ -97,118 +196,94 @@ func update*(state: AppState, msg: Msg, listHeight: int): AppState =
   of MsgInput:
     let k = msg.key
 
-    if k == KeyUp:
-      if result.visibleIndices.len > 0:
-        result.cursor = min(result.visibleIndices.len - 1, result.cursor + 1)
-        result.detailScroll = 0
-    elif k == KeyDown:
-      if result.visibleIndices.len > 0:
-        result.cursor = max(0, result.cursor - 1)
-        result.detailScroll = 0
-    elif k == KeyLeft:
-      if result.searchCursor > 0:
-        result.searchCursor.dec()
-    elif k == KeyRight:
-      if result.searchCursor < result.searchBuffer.len:
-        result.searchCursor.inc()
-    elif k == KeyPageUp:
-      if result.visibleIndices.len > 0:
-        result.cursor = min(result.visibleIndices.len - 1, result.cursor + listHeight)
-        result.detailScroll = 0
-    elif k == KeyPageDown:
-      if result.visibleIndices.len > 0:
-        result.cursor = max(0, result.cursor - listHeight)
-        result.detailScroll = 0
-    elif k == KeyHome:
-      if result.visibleIndices.len > 0:
-        result.cursor = result.visibleIndices.len - 1
-        result.scroll = max(0, result.cursor - listHeight + 1)
-        result.detailScroll = 0
-    elif k == KeyEnd:
-      if result.visibleIndices.len > 0:
+    if result.inputMode != ModeVimCommand:
+      if k == KeyCtrlA:
+        if result.searchMode == ModeLocal:
+          result.searchMode = ModeHybrid
+        else:
+          result.searchMode = ModeLocal
+          if result.localPkgCount > 0:
+            result.pkgs.setLen(result.localPkgCount)
+            result.stringPool.setLen(result.localPoolLen)
+            result.repoList.setLen(result.localRepoCount)
+            result.visibleIndices = filterIndices(result, result.searchBuffer)
+            result.cursor = 0
+        return
+
+      if k == KeyCtrlS:
+        result.viewingSelection = not result.viewingSelection
         result.cursor = 0
         result.scroll = 0
-        result.detailScroll = 0
-    elif k == KeyDetailUp:
-      result.detailScroll = max(0, result.detailScroll - 1)
-    elif k == KeyDetailDown:
-      if result.visibleIndices.len > 0:
-        let id = result.getPkgId(result.visibleIndices[result.cursor])
-        if result.detailsCache.hasKey(id):
-          let lines = result.detailsCache[id].countLines()
-          if result.detailScroll < lines - 1:
-            result.detailScroll.inc()
-    elif k == KeyEnter:
-      result.shouldInstall = true
-    elif k == KeyCtrlA:
-      if result.searchMode == ModeLocal:
-        result.searchMode = ModeHybrid
-      else:
-        result.searchMode = ModeLocal
-        if result.localPkgCount > 0:
-          result.pkgs.setLen(result.localPkgCount)
-          result.stringPool.setLen(result.localPoolLen)
-          result.repoList.setLen(result.localRepoCount)
+        if result.viewingSelection:
+          result.visibleIndices = filterBySelection(result)
+        else:
+          result.visibleIndices = filterIndices(result, result.searchBuffer)
+        return
+
+      if k == KeyF1:
+        result.showDetails = not result.showDetails
+        return
+
+    if result.inputMode == ModeVimCommand:
+      handleVimCommand(result, k)
+    elif result.inputMode == ModeVimNormal:
+      handleVimNormal(result, k, listHeight)
+    else:
+      if result.inputMode == ModeVimInsert and k == KeyEsc:
+        result.inputMode = ModeVimNormal
+        return
+
+      if k == KeyUp:
+        if result.visibleIndices.len > 0:
+          result.cursor = min(result.visibleIndices.len - 1, result.cursor + 1)
+          result.detailScroll = 0
+      elif k == KeyDown:
+        if result.visibleIndices.len > 0:
+          result.cursor = max(0, result.cursor - 1)
+          result.detailScroll = 0
+      elif k == KeyPageUp:
+        if result.visibleIndices.len > 0:
+          result.cursor = min(result.visibleIndices.len - 1, result.cursor + listHeight)
+      elif k == KeyPageDown:
+        if result.visibleIndices.len > 0:
+          result.cursor = max(0, result.cursor - listHeight)
+      elif k == KeyBack or k == KeyBackspace:
+        if result.viewingSelection:
+          result.viewingSelection = false
+        if result.searchCursor > 0:
+          result.searchBuffer.delete(result.searchCursor - 1 .. result.searchCursor - 1)
+          result.searchCursor.dec()
           result.visibleIndices = filterIndices(result, result.searchBuffer)
           result.cursor = 0
-    elif k == KeyCtrlS:
-      result.viewingSelection = not result.viewingSelection
-      result.cursor = 0
-      result.scroll = 0
-      if result.viewingSelection:
-        result.visibleIndices = filterBySelection(result)
-      else:
-        result.visibleIndices = filterIndices(result, result.searchBuffer)
-    elif k == KeyEsc:
-      if result.viewingSelection:
-        result.viewingSelection = false
+      elif k == KeyLeft:
+        if result.searchCursor > 0:
+          result.searchCursor.dec()
+      elif k == KeyRight:
+        if result.searchCursor < result.searchBuffer.len:
+          result.searchCursor.inc()
+      elif k.ord >= 32 and k.ord <= 126:
+        if result.viewingSelection:
+          result.viewingSelection = false
+        result.searchBuffer.insert($k, result.searchCursor)
+        result.searchCursor.inc()
         result.visibleIndices = filterIndices(result, result.searchBuffer)
         result.cursor = 0
-      elif result.searchBuffer.len > 0:
-        result.searchBuffer = ""
-        result.searchCursor = 0
-        result.searchMode = ModeLocal
-        if result.localPkgCount > 0:
-          result.pkgs.setLen(result.localPkgCount)
-          result.stringPool.setLen(result.localPoolLen)
-          result.repoList.setLen(result.localRepoCount)
-        result.visibleIndices = filterIndices(result, "")
-        result.cursor = 0
-        result.scroll = 0
-      else:
-        result.shouldQuit = true
-    elif k == KeyTab:
-      if result.visibleIndices.len > 0:
-        let id = result.getPkgId(result.visibleIndices[result.cursor])
-        if id in result.selected:
-          result.selected.excl(id)
+      elif k == KeyTab:
+        toggleSelection(result)
+      elif k == KeyEnter:
+        result.shouldInstall = true
+      elif k == KeyCtrlR:
+        result.shouldUninstall = true
+      elif k == KeyEsc:
+        if result.viewingSelection:
+          result.viewingSelection = false
+          result.visibleIndices = filterIndices(result, result.searchBuffer)
+        elif result.searchBuffer.len > 0:
+          result.searchBuffer = ""
+          result.searchCursor = 0
+          result.visibleIndices = filterIndices(result, "")
         else:
-          result.selected.incl(id)
-        if result.cursor < result.visibleIndices.len - 1:
-          result.cursor.inc()
-    elif k == KeyBack or k == KeyBackspace:
-      if result.viewingSelection:
-        result.viewingSelection = false
-
-      if result.searchCursor > 0:
-        result.searchBuffer.delete(result.searchCursor - 1 .. result.searchCursor - 1)
-        result.searchCursor.dec()
-        result.visibleIndices = filterIndices(result, result.searchBuffer)
-        result.cursor = 0
-        if result.searchBuffer.len == 0:
-          result.searchMode = ModeLocal
-    elif k.ord >= 32 and k.ord <= 126:
-      if result.viewingSelection:
-        result.viewingSelection = false
-
-      result.searchBuffer.insert($k, result.searchCursor)
-      result.searchCursor.inc()
-      result.visibleIndices = filterIndices(result, result.searchBuffer)
-      result.cursor = 0
-    elif k == KeyF1:
-      result.showDetails = not result.showDetails
-    elif k == KeyCtrlR:
-      result.shouldUninstall = true
+          result.shouldQuit = true
 
     if result.visibleIndices.len > 0:
       result.cursor = clamp(result.cursor, 0, result.visibleIndices.len - 1)

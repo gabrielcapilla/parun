@@ -46,6 +46,15 @@ proc readInputSafe(): char =
   if b1 == 19:
     return KeyCtrlS
 
+  if b1 == 21:
+    return KeyCtrlU
+  if b1 == 4:
+    return KeyCtrlD
+  if b1 == 25:
+    return KeyCtrlY
+  if b1 == 5:
+    return KeyCtrlE
+
   if b1 == 27:
     var retries = 0
     var b2 = -1
@@ -121,6 +130,7 @@ proc main() =
   var
     startMode = ModeLocal
     startShowDetails = true
+    useVim = false
 
   var p = initOptParser()
   for kind, key, val in p.getopt():
@@ -131,6 +141,8 @@ proc main() =
         startMode = ModeHybrid
       of "noinfo", "n":
         startShowDetails = false
+      of "vim":
+        useVim = true
       else:
         discard
     else:
@@ -142,7 +154,7 @@ proc main() =
 
   initPackageManager()
 
-  var state = newState(startMode, startShowDetails)
+  var state = newState(startMode, startShowDetails, useVim)
   requestLoadAll()
 
   let selector = newSelector[int]()
@@ -195,8 +207,16 @@ proc main() =
       stdout.write("\e[?25l")
       setCursorPos(0, 0)
       stdout.write(frame)
-      setCursorPos(cx, cy)
-      stdout.write("\e[?25h")
+
+      if state.inputMode == ModeVimCommand:
+        setCursorPos(cx, cy)
+        stdout.write("\e[?25h")
+      elif state.inputMode == ModeVimNormal:
+        setCursorPos(terminalWidth(), terminalHeight())
+      else:
+        setCursorPos(cx, cy)
+        stdout.write("\e[?25h")
+
       stdout.flushFile()
       state.needsRedraw = false
 
@@ -214,10 +234,12 @@ proc main() =
         let listH = max(1, terminalHeight() - 2)
         state = update(state, Msg(kind: MsgInput, key: k), listH)
 
+        let inInsert =
+          state.inputMode == ModeStandard or state.inputMode == ModeVimInsert
         let isEditing =
           (k.ord >= 32 and k.ord <= 126) or k == KeyBack or k == KeyBackspace
         let isToggle = (k == KeyCtrlA)
-        let shouldCheckNetwork = isEditing or isToggle
+        let shouldCheckNetwork = (isEditing and inInsert) or isToggle
 
         if shouldCheckNetwork and not state.viewingSelection:
           let hasAurPrefix = state.searchBuffer.startsWith("aur/")

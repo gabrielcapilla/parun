@@ -128,27 +128,51 @@ func renderUi*(state: AppState, termH, termW: int): RenderResult =
   if state.selected.len > 0:
     statusPrefix.add(fmt"{ColorSel}[{state.selected.len}]{AnsiReset} ")
 
-  let modeStr =
-    if state.viewingSelection:
-      fmt"{ColorModeReview}[REVISIÓN]{AnsiReset}"
-    elif state.searchMode == ModeLocal:
-      fmt"{ColorModeLocal}[Local]{AnsiReset}"
+  var modeStr = ""
+  if state.inputMode == ModeVimCommand:
+    modeStr = fmt"{ColorVimCommand} COMMAND {AnsiReset}"
+  elif state.viewingSelection:
+    modeStr = fmt"{ColorModeReview}[REVISIÓN]{AnsiReset}"
+  elif state.inputMode == ModeVimNormal:
+    modeStr = fmt"{ColorVimNormal} NORMAL {AnsiReset}"
+  elif state.inputMode == ModeVimInsert:
+    modeStr = fmt"{ColorVimInsert} INSERT {AnsiReset}"
+  elif state.searchMode == ModeLocal:
+    modeStr = fmt"{ColorModeLocal}[Local]{AnsiReset}"
+  else:
+    modeStr = fmt"{ColorModeHybrid}[Local+AUR]{AnsiReset}"
+
+  if (state.inputMode == ModeVimNormal or state.inputMode == ModeVimInsert) and
+      state.searchMode == ModeHybrid:
+    modeStr.add(fmt" {ColorModeHybrid}[AUR]{AnsiReset}")
+
+  var leftSide = ""
+  var cursorVisualX = 0
+
+  if state.inputMode == ModeVimCommand:
+    leftSide = fmt"{ColorPrompt}:{AnsiReset}{state.commandBuffer}"
+
+    cursorVisualX = 1 + visibleWidth(state.commandBuffer)
+  else:
+    let promptChar = if state.inputMode == ModeVimNormal: ":" else: ">"
+    leftSide = fmt"{ColorPrompt}{promptChar}{AnsiReset} {state.searchBuffer}"
+
+    let textBeforeCursor = state.searchBuffer[0 ..< state.searchCursor]
+    cursorVisualX = 2 + visibleWidth(textBeforeCursor)
+
+  let leftSideVisTotal = visibleWidth(leftSide)
+
+  let leftSideClean =
+    if state.inputMode == ModeVimCommand:
+      ":" & state.commandBuffer
     else:
-      fmt"{ColorModeHybrid}[Local+AUR]{AnsiReset}"
+      (if state.inputMode == ModeVimNormal: ": " else: "> ") & state.searchBuffer
+  let leftLen = visibleWidth(leftSideClean)
 
-  let leftSide = fmt"{ColorPrompt}>{AnsiReset} {state.searchBuffer}"
-
-  let promptVisualLen = 2
-  let textBeforeCursor = state.searchBuffer[0 ..< state.searchCursor]
-  let inputVisualLen = visibleWidth(textBeforeCursor)
-  let cursorVisualX = promptVisualLen + inputVisualLen
-
-  let leftSideVisTotal =
-    visibleWidth(fmt"{ColorPrompt}>{AnsiReset} {state.searchBuffer}")
   let rightSide = fmt"{statusPrefix}{modeStr} {pkgCountStr}"
   let rightLen = visibleWidth(rightSide)
 
-  let spacing = max(0, termW - leftSideVisTotal - rightLen)
+  let spacing = max(0, termW - leftLen - rightLen)
 
   buffer.add(leftSide & repeat(" ", spacing) & rightSide)
 

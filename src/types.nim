@@ -1,29 +1,37 @@
 import std/[sets, tables]
 
 const
-  KeyEnter* = char(13)
-  KeyEsc* = char(27)
-  KeyTab* = char(9)
-  KeyBack* = char(127)
-  KeyBackspace* = char(8)
-
-  KeyUp* = char(11)
-  KeyDown* = char(10)
-  KeyLeft* = char(2)
-  KeyRight* = char(6)
-
-  KeyPageUp* = char(23)
-  KeyPageDown* = char(24)
-  KeyHome* = char(25)
-  KeyEnd* = char(26)
-
-  KeyDetailUp* = char(28)
-  KeyDetailDown* = char(29)
-
-  KeyCtrlR* = char(18)
   KeyCtrlA* = char(1)
+  KeyCtrlB* = char(2)
+  KeyCtrlC* = char(3)
+  KeyCtrlD* = char(4)
+  KeyCtrlE* = char(5)
+  KeyCtrlF* = char(6)
+  KeyBackspace* = char(8)
+  KeyTab* = char(9)
+  KeyEnter* = char(13)
+  KeyCtrlR* = char(18)
   KeyCtrlS* = char(19)
-  KeyF1* = char(133)
+  KeyCtrlU* = char(21)
+  KeyCtrlY* = char(25)
+  KeyEsc* = char(27)
+  KeySpace* = char(32)
+  KeyBack* = char(127)
+
+  KeyUp* = char(200)
+  KeyDown* = char(201)
+  KeyLeft* = char(202)
+  KeyRight* = char(203)
+
+  KeyPageUp* = char(204)
+  KeyPageDown* = char(205)
+  KeyHome* = char(206)
+  KeyEnd* = char(207)
+
+  KeyDetailUp* = char(208)
+  KeyDetailDown* = char(209)
+
+  KeyF1* = char(210)
 
   AnsiReset* = "\e[0m"
   AnsiBold* = "\e[1m"
@@ -39,6 +47,9 @@ const
   ColorModeLocal* = "\e[1;32m"
   ColorModeHybrid* = "\e[1;35m"
   ColorModeReview* = "\e[1;33m"
+  ColorVimNormal* = "\e[1;44;97m"
+  ColorVimInsert* = "\e[1;42;97m"
+  ColorVimCommand* = "\e[1;41;97m"
 
 type
   CompactPackage* = object
@@ -52,6 +63,12 @@ type
   SearchMode* = enum
     ModeLocal
     ModeHybrid
+
+  InputMode* = enum
+    ModeStandard
+    ModeVimNormal
+    ModeVimInsert
+    ModeVimCommand
 
   MsgKind* = enum
     MsgInput
@@ -96,7 +113,10 @@ type
     searchBuffer*: string
     searchCursor*: int
 
+    commandBuffer*: string
+
     searchMode*: SearchMode
+    inputMode*: InputMode
     viewingSelection*: bool
 
     isSearching*: bool
