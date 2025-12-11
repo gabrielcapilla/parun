@@ -1,5 +1,5 @@
-import std/[strutils, sets, tables, algorithm, math, editdistance]
-import types
+import std/[strutils, sets, tables, algorithm, math]
+import types, simd
 
 template getName*(state: AppState, p: CompactPackage): string =
   state.stringPool[int(p.nameOffset) ..< int(p.nameOffset) + int(p.nameLen)]
@@ -14,51 +14,6 @@ func getPkgId*(state: AppState, idx: int32): string =
   let p = state.pkgs[int(idx)]
   state.getRepo(p) & "/" & state.getName(p)
 
-func scorePkg(pool: string, p: CompactPackage, query: string): int =
-  let nameStart = int(p.nameOffset)
-  let nameLen = int(p.nameLen)
-  let packageName = pool[nameStart ..< nameStart + nameLen].toLowerAscii()
-
-  if nameLen == query.len:
-    var match = true
-    for i in 0 ..< query.len:
-      if packageName[i] != query[i]:
-        match = false
-        break
-    if match:
-      return 1000
-
-  if nameLen >= query.len:
-    var match = true
-    for i in 0 ..< query.len:
-      if packageName[i] != query[i]:
-        match = false
-        break
-    if match:
-      return 500
-
-  var qIdx = 0
-  for i in 0 ..< nameLen:
-    if packageName[i] == query[qIdx]:
-      inc qIdx
-      if qIdx == query.len:
-        return 250
-    elif qIdx > 0:
-      if packageName[i] == query[0]:
-        qIdx = 1
-      else:
-        qIdx = 0
-
-  let editDist = editDistance(packageName, query)
-  let maxLength = max(packageName.len, query.len)
-  if maxLength > 0:
-    let similarity = 1.0 - (float(editDist) / float(maxLength))
-
-    if similarity >= 0.6:
-      return int(similarity * 200)
-
-  return 0
-
 func filterIndices(state: AppState, query: string): seq[int32] =
   let cleanQuery = query.strip()
   if cleanQuery.len == 0:
@@ -67,13 +22,29 @@ func filterIndices(state: AppState, query: string): seq[int32] =
       result[i] = int32(i)
     return
 
-  let qLow = cleanQuery.toLowerAscii()
-  var scored = newSeqOfCap[tuple[idx: int32, score: int]](1000)
+  let tokens = cleanQuery.splitWhitespace()
+
+  if tokens.len == 0:
+    return @[]
+
+  var scored = newSeqOfCap[tuple[idx: int32, score: int]](state.pkgs.len div 4)
 
   for i in 0 ..< state.pkgs.len:
-    let s = scorePkg(state.stringPool, state.pkgs[i], qLow)
-    if s > 0:
-      scored.add((int32(i), s))
+    let p = state.pkgs[i]
+    var totalScore = 0
+    var allTokensMatch = true
+
+    for token in tokens:
+      let s = scorePackageSimd(state.stringPool, p.nameOffset, p.nameLen, token)
+
+      if s == 0:
+        allTokensMatch = false
+        break
+
+      totalScore += s
+
+    if allTokensMatch:
+      scored.add((int32(i), totalScore))
 
   scored.sort do(a, b: auto) -> int:
     cmp(b.score, a.score)
