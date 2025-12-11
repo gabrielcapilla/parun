@@ -101,3 +101,5 @@ type
     shouldUninstall*: bool
     showDetails*: bool
     justReceivedSearchResults*: bool
+
+    detailScroll*: int

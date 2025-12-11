@@ -75,6 +75,7 @@ func newState*(initialMode: SearchMode, initialShowDetails: bool): AppState =
     searchMode: initialMode,
     isSearching: false,
     showDetails: initialShowDetails,
+    detailScroll: 0,
   )
 
 func update*(state: AppState, msg: Msg, listHeight: int): AppState =
@@ -88,24 +89,29 @@ func update*(state: AppState, msg: Msg, listHeight: int): AppState =
     if k == KeyUp:
       if result.visibleIndices.len > 0:
         result.cursor = min(result.visibleIndices.len - 1, result.cursor + 1)
+        result.detailScroll = 0
     elif k == KeyDown:
       if result.visibleIndices.len > 0:
         result.cursor = max(0, result.cursor - 1)
+        result.detailScroll = 0
     elif k == KeyPageUp:
       if result.visibleIndices.len > 0:
         result.cursor = min(result.visibleIndices.len - 1, result.cursor + listHeight)
+        result.detailScroll = 0
     elif k == KeyPageDown:
       if result.visibleIndices.len > 0:
         result.cursor = max(0, result.cursor - listHeight)
+        result.detailScroll = 0
     elif k == KeyHome:
       if result.visibleIndices.len > 0:
         result.cursor = result.visibleIndices.len - 1
-
         result.scroll = max(0, result.cursor - listHeight + 1)
+        result.detailScroll = 0
     elif k == KeyEnd:
       if result.visibleIndices.len > 0:
         result.cursor = 0
         result.scroll = 0
+        result.detailScroll = 0
     elif k == KeyEnter:
       result.shouldInstall = true
     elif k == KeyCtrlA:

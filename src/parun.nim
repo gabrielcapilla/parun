@@ -43,7 +43,6 @@ proc readInputSafe(): char =
   if b1 == 27:
     var retries = 0
     var b2 = -1
-
     while retries < 10:
       b2 = readByte()
       if b2 != -1:
@@ -58,7 +57,6 @@ proc readInputSafe(): char =
       let b3 = readByte()
       if b3 == -1:
         return '\0'
-
       case b3
       of ord('A'):
         return KeyUp
@@ -95,7 +93,6 @@ proc readInputSafe(): char =
         return KeyEnd
       else:
         return '\0'
-
     return KeyEsc
 
   return char(b1)

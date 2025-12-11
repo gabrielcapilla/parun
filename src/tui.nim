@@ -75,12 +75,18 @@ func renderUi*(state: AppState, termH, termW: int): RenderResult =
         let pId = state.getPkgId(curIdx)
         if state.detailsCache.hasKey(pId):
           let dLines = state.detailsCache[pId].splitLines
-          if r < dLines.len:
-            let dLine = dLines[r]
-            if dLine.len > detailW:
-              line.add(dLine[0 ..< detailW])
+
+          let scrollOffset = state.detailScroll
+          let effectiveR = r + scrollOffset
+
+          if effectiveR < dLines.len:
+            let dLine = dLines[effectiveR]
+            let cleanLine = dLine.replace("\t", "  ")
+
+            if cleanLine.len > detailW:
+              line.add(truncate(cleanLine, detailW))
             else:
-              line.add(dLine & repeat(" ", detailW - dLine.len))
+              line.add(cleanLine & repeat(" ", detailW - cleanLine.len))
           else:
             line.add(repeat(" ", detailW))
         else:

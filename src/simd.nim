@@ -37,7 +37,7 @@ func findNextMatchPtr(
         isWordStart = true
       elif matchPos > 0:
         let prevChar = cast[ptr char](baseAddr + matchPos - 1)[]
-        isWordStart = prevChar == ' '
+        isWordStart = prevChar == ' ' or prevChar == '-' or prevChar == '_'
 
       return (pos: matchPos, isWordStart: isWordStart)
 
@@ -46,15 +46,12 @@ func findNextMatchPtr(
   if pos < textLen:
     var lastChunk: array[VectorSize, char]
     let remaining = textLen - pos
-
     copyMem(addr lastChunk[0], cast[pointer](baseAddr + pos), remaining)
-
     if remaining < VectorSize:
       zeroMem(addr lastChunk[remaining], VectorSize - remaining)
 
     let textVec = toLowerSimd(mm_loadu_si128(cast[ptr M128i](addr lastChunk[0])))
     let patternLowerVec = toLowerSimd(patternVec)
-
     let validMask = (1 shl remaining) - 1
     let matches = mm_cmpeq_epi8(textVec, patternLowerVec)
     let matchMask = mm_movemask_epi8(matches) and validMask
@@ -68,7 +65,7 @@ func findNextMatchPtr(
           isWordStart = true
         elif matchPos > 0:
           let prevChar = cast[ptr char](baseAddr + matchPos - 1)[]
-          isWordStart = prevChar == ' '
+          isWordStart = prevChar == ' ' or prevChar == '-' or prevChar == '_'
         return (pos: matchPos, isWordStart: isWordStart)
 
   return (pos: -1, isWordStart: false)
@@ -95,7 +92,7 @@ func scorePackageSimd*(
     let matchResult = findNextMatchPtr(qChar, textPtr, textLen, searchPos)
 
     if matchResult.pos == -1:
-      return 0 # Falta un caracter del query, descarte inmediato
+      return 0
 
     score += 10.0
     if matchResult.isWordStart:
@@ -107,7 +104,6 @@ func scorePackageSimd*(
     else:
       consecutiveMatches = 0
 
-    # Bonus de Case Sensitive (SIMD busca en minúsculas, aquí premiamos la exactitud)
     let charInText = cast[ptr char](cast[int](textPtr) + matchResult.pos)[]
     if charInText == qChar:
       score += 5.0
@@ -115,12 +111,20 @@ func scorePackageSimd*(
     lastMatchPos = matchResult.pos
     searchPos = matchResult.pos + 1
 
-  # Normalización por longitud (densidad de coincidencia)
+  # Densidad: Penaliza si el paquete es mucho más largo que la búsqueda
+  # Ej: query="git"(3), pkg="git"(3) -> density=1.0
+  # Ej: query="git"(3), pkg="git-cola"(8) -> density=0.375
   let density = float32(query.len) / float32(textLen)
   score *= density
 
   # Bonus si la coincidencia ocurre al principio del texto
   if lastMatchPos < textLen div 2:
     score *= 1.2
+
+  # --- BOOST DE EXACTITUD ---
+  # Si la longitud es idéntica y hemos llegado hasta aquí (encontrando todos los caracteres),
+  # es una coincidencia exacta. Multiplicamos masivamente.
+  if query.len == textLen:
+    score *= 5.0
 
   return int(score)
