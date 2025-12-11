@@ -6,10 +6,17 @@ const
   KeyTab* = char(9)
   KeyBack* = char(127)
   KeyBackspace* = char(8)
+
   KeyUp* = char(11)
   KeyDown* = char(10)
   KeyLeft* = char(2)
   KeyRight* = char(6)
+
+  KeyPageUp* = char(23)
+  KeyPageDown* = char(24)
+  KeyHome* = char(25)
+  KeyEnd* = char(26)
+
   KeyCtrlR* = char(18)
   KeyCtrlA* = char(1)
   KeyF1* = char(133)
