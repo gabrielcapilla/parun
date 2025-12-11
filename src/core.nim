@@ -1,5 +1,6 @@
 import std/[strutils, sets, tables, algorithm, math]
-import types, simd
+import types
+import simd
 
 template getName*(state: AppState, p: CompactPackage): string =
   state.stringPool[int(p.nameOffset) ..< int(p.nameOffset) + int(p.nameLen)]
@@ -14,8 +15,15 @@ func getPkgId*(state: AppState, idx: int32): string =
   let p = state.pkgs[int(idx)]
   state.getRepo(p) & "/" & state.getName(p)
 
+func getEffectiveQuery*(buffer: string): string =
+  if buffer.startsWith("aur/"):
+    return buffer[4 ..^ 1]
+  return buffer
+
 func filterIndices(state: AppState, query: string): seq[int32] =
-  let cleanQuery = query.strip()
+  let effective = getEffectiveQuery(query)
+  let cleanQuery = effective.strip()
+
   if cleanQuery.len == 0:
     result = newSeq[int32](state.pkgs.len)
     for i in 0 ..< state.pkgs.len:
@@ -23,7 +31,6 @@ func filterIndices(state: AppState, query: string): seq[int32] =
     return
 
   let tokens = cleanQuery.splitWhitespace()
-
   if tokens.len == 0:
     return @[]
 
@@ -36,11 +43,9 @@ func filterIndices(state: AppState, query: string): seq[int32] =
 
     for token in tokens:
       let s = scorePackageSimd(state.stringPool, p.nameOffset, p.nameLen, token)
-
       if s == 0:
         allTokensMatch = false
         break
-
       totalScore += s
 
     if allTokensMatch:
@@ -67,6 +72,7 @@ func newState*(): AppState =
     cursor: 0,
     scroll: 0,
     searchBuffer: "",
+    searchMode: ModeLocal,
     isSearching: false,
     showDetails: true,
   )
@@ -86,10 +92,23 @@ func update*(state: AppState, msg: Msg, listHeight: int): AppState =
         result.cursor = max(0, result.cursor - 1)
     elif k == KeyEnter:
       result.shouldInstall = true
+    elif k == KeyCtrlA:
+      if result.searchMode == ModeLocal:
+        result.searchMode = ModeHybrid
+      else:
+        result.searchMode = ModeLocal
+
+        if result.localPkgCount > 0:
+          result.pkgs.setLen(result.localPkgCount)
+          result.stringPool.setLen(result.localPoolLen)
+          result.repoList.setLen(result.localRepoCount)
+          result.visibleIndices = filterIndices(result, result.searchBuffer)
+          result.cursor = 0
     elif k == KeyEsc:
       if result.searchBuffer.len > 0:
         result.searchBuffer = ""
         result.searchCursor = 0
+        result.searchMode = ModeLocal
 
         if result.localPkgCount > 0:
           result.pkgs.setLen(result.localPkgCount)
@@ -114,9 +133,11 @@ func update*(state: AppState, msg: Msg, listHeight: int): AppState =
       if result.searchCursor > 0:
         result.searchBuffer.delete(result.searchCursor - 1 .. result.searchCursor - 1)
         result.searchCursor.dec()
-
         result.visibleIndices = filterIndices(result, result.searchBuffer)
         result.cursor = 0
+
+        if result.searchBuffer.len == 0:
+          result.searchMode = ModeLocal
     elif k.ord >= 32 and k.ord <= 126:
       result.searchBuffer.insert($k, result.searchCursor)
       result.searchCursor.inc()
@@ -138,6 +159,9 @@ func update*(state: AppState, msg: Msg, listHeight: int): AppState =
       result.scroll = 0
   of MsgSearchResults:
     if msg.searchId > 0:
+      if msg.searchId != result.searchId:
+        return result
+
       if result.localPkgCount > 0:
         result.pkgs.setLen(result.localPkgCount)
         result.stringPool.setLen(result.localPoolLen)
@@ -171,6 +195,16 @@ func update*(state: AppState, msg: Msg, listHeight: int): AppState =
         result.pkgs.add(newP)
 
       result.visibleIndices = filterIndices(result, result.searchBuffer)
+
+      if result.visibleIndices.len > 0:
+        result.cursor = clamp(result.cursor, 0, result.visibleIndices.len - 1)
+        if result.cursor < result.scroll:
+          result.scroll = result.cursor
+        elif result.cursor >= result.scroll + listHeight:
+          result.scroll = result.cursor - listHeight + 1
+      else:
+        result.cursor = 0
+        result.scroll = 0
     else:
       result.pkgs = msg.packedPkgs
       result.stringPool = msg.poolData
@@ -181,12 +215,11 @@ func update*(state: AppState, msg: Msg, listHeight: int): AppState =
       result.localRepoCount = result.repoList.len
 
       result.visibleIndices = filterIndices(result, result.searchBuffer)
+      result.cursor = 0
+      result.scroll = 0
 
     result.isSearching = false
     result.justReceivedSearchResults = true
-
-    result.cursor = 0
-    result.scroll = 0
   of MsgDetailsLoaded:
     result.detailsCache[msg.pkgId] = msg.content
   of MsgError:

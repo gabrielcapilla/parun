@@ -1,4 +1,4 @@
-import std/[terminal, os, termios, selectors, tables, posix, strutils, sets]
+import std/[terminal, os, termios, selectors, posix, strutils, sets, tables]
 import types, core, tui, pkgManager
 
 proc initRawMode(): Termios =
@@ -7,6 +7,14 @@ proc initRawMode(): Termios =
   raw.c_iflag = raw.c_iflag and not (ICRNL or IXON)
   raw.c_lflag = raw.c_lflag and not (ECHO or ICANON or ISIG or IEXTEN)
   discard tcSetAttr(STDIN_FILENO, TCSAFLUSH, addr raw)
+
+  var flags = fcntl(STDIN_FILENO, F_GETFL, 0)
+  discard fcntl(STDIN_FILENO, F_SETFL, flags or O_NONBLOCK)
+
+proc sleepMicros(us: int) =
+  var req = Timespec(tv_sec: Time(0), tv_nsec: us * 1000)
+  var rem: Timespec
+  discard nanosleep(req, rem)
 
 proc readByte(): int =
   var b: char
@@ -18,6 +26,7 @@ proc readInputSafe(): char =
   let b1 = readByte()
   if b1 == -1:
     return '\0'
+
   if b1 == 10 or b1 == 13:
     return KeyEnter
   if b1 == 127:
@@ -28,16 +37,26 @@ proc readInputSafe(): char =
     return KeyTab
   if b1 == 18:
     return KeyCtrlR
+  if b1 == 1:
+    return KeyCtrlA
 
   if b1 == 27:
-    var pfd: TPollfd
-    pfd.fd = STDIN_FILENO
-    pfd.events = POLLIN
-    if posix.poll(addr pfd, 1, 0) <= 0:
+    var retries = 0
+    var b2 = -1
+    while retries < 10:
+      b2 = readByte()
+      if b2 != -1:
+        break
+      sleepMicros(1000)
+      inc retries
+
+    if b2 == -1:
       return KeyEsc
-    let b2 = readByte()
-    let b3 = readByte()
+
     if b2 == ord('['):
+      let b3 = readByte()
+      if b3 == -1:
+        return '\0'
       case b3
       of ord('A'):
         return KeyUp
@@ -50,12 +69,14 @@ proc readInputSafe(): char =
       else:
         return '\0'
     elif b2 == ord('O'):
+      let b3 = readByte()
       case b3
       of ord('P'):
         return KeyF1
       else:
         return '\0'
-    return '\0'
+    return KeyEsc
+
   return char(b1)
 
 proc main() =
@@ -72,7 +93,6 @@ proc main() =
 
   defer:
     selector.close()
-    shutdownPackageManager()
     stdout.write("\e[?1049l\e[?25h" & AnsiReset)
     discard tcSetAttr(STDIN_FILENO, TCSAFLUSH, addr origTerm)
     stdout.flushFile()
@@ -124,12 +144,25 @@ proc main() =
     if ready.len > 0:
       let k = readInputSafe()
       if k != '\0':
+        let oldMode = state.searchMode
         state = update(state, Msg(kind: MsgInput, key: k), max(1, terminalHeight() - 1))
 
-        if (k.ord >= 32 and k.ord <= 126) or k == KeyBack or k == KeyBackspace:
-          if state.searchBuffer.len > 2:
+        let isEditing =
+          (k.ord >= 32 and k.ord <= 126) or k == KeyBack or k == KeyBackspace
+        let isToggle = (k == KeyCtrlA)
+
+        let shouldCheckNetwork = isEditing or isToggle
+
+        if shouldCheckNetwork:
+          let hasAurPrefix = state.searchBuffer.startsWith("aur/")
+
+          let effectiveQuery = getEffectiveQuery(state.searchBuffer)
+
+          let active = (state.searchMode == ModeHybrid) or hasAurPrefix
+
+          if active and effectiveQuery.len > 2:
             state.searchId.inc()
-            requestSearch(state.searchBuffer, state.searchId)
+            requestSearch(effectiveQuery, state.searchId)
 
     for msg in pollWorkerMessages():
       state = update(state, msg, max(1, terminalHeight() - 1))

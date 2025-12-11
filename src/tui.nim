@@ -100,9 +100,14 @@ func renderUi*(state: AppState, termH, termW: int): RenderResult =
       fmt"{AnsiDim}({state.visibleIndices.len}/{state.pkgs.len}){AnsiReset}"
 
   var statusPrefix = ""
-
   if state.selected.len > 0:
-    statusPrefix.add(fmt"{ColorSel}[{state.selected.len}]{AnsiReset}")
+    statusPrefix.add(fmt"{ColorSel}[{state.selected.len}]{AnsiReset} ")
+
+  let modeStr =
+    if state.searchMode == ModeLocal:
+      fmt"{ColorModeLocal}[Local]{AnsiReset}"
+    else:
+      fmt"{ColorModeHybrid}[Local+AUR]{AnsiReset}"
 
   var displayBuffer = state.searchBuffer
   if state.searchCursor >= 0 and state.searchCursor <= state.searchBuffer.len:
@@ -110,10 +115,11 @@ func renderUi*(state: AppState, termH, termW: int): RenderResult =
 
   let leftSide = fmt"{ColorPrompt}>{AnsiReset} {displayBuffer}"
   let leftLen = visibleWidth(leftSide)
-  let rightLen = visibleWidth(pkgCountStr)
+  let rightSide = fmt"{statusPrefix}{modeStr} {pkgCountStr}"
+  let rightLen = visibleWidth(rightSide)
 
   let spacing = max(0, termW - leftLen - rightLen)
-  let statusLine = leftSide & repeat(" ", spacing) & pkgCountStr
+  let statusLine = leftSide & repeat(" ", spacing) & rightSide
 
   let promptVisLen = 2
   let cursorVisualX = promptVisLen

@@ -11,6 +11,7 @@ const
   KeyLeft* = char(2)
   KeyRight* = char(6)
   KeyCtrlR* = char(18)
+  KeyCtrlA* = char(1)
   KeyF1* = char(133)
 
   AnsiReset* = "\e[0m"
@@ -24,6 +25,9 @@ const
   ColorPrompt* = "\e[36m"
   ColorHighlightBg* = "\e[48;5;235m"
 
+  ColorModeLocal* = "\e[1;32m"
+  ColorModeHybrid* = "\e[1;35m"
+
 type
   CompactPackage* = object
     repoIdx*: uint8
@@ -32,6 +36,10 @@ type
     verOffset*: int32
     verLen*: int16
     isInstalled*: bool
+
+  SearchMode* = enum
+    ModeLocal
+    ModeHybrid
 
   MsgKind* = enum
     MsgInput
@@ -74,6 +82,8 @@ type
     scroll*: int
     searchBuffer*: string
     searchCursor*: int
+
+    searchMode*: SearchMode
 
     isSearching*: bool
     searchId*: int
