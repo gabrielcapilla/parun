@@ -1,6 +1,5 @@
 import std/[strutils, sets, tables, algorithm, math]
-import types, pkgManager
-import simd
+import types, simd, pkgManager
 
 template getName*(state: AppState, p: CompactPackage): string =
   state.stringPool[int(p.nameOffset) ..< int(p.nameOffset) + int(p.nameLen)]
