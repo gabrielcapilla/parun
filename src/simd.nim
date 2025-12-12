@@ -1,5 +1,5 @@
 import nimsimd/sse2
-import std/[bitops]
+import std/bitops
 
 const VectorSize = 16
 
@@ -111,19 +111,12 @@ func scorePackageSimd*(
     lastMatchPos = matchResult.pos
     searchPos = matchResult.pos + 1
 
-  # Densidad: Penaliza si el paquete es mucho más largo que la búsqueda
-  # Ej: query="git"(3), pkg="git"(3) -> density=1.0
-  # Ej: query="git"(3), pkg="git-cola"(8) -> density=0.375
   let density = float32(query.len) / float32(textLen)
   score *= density
 
-  # Bonus si la coincidencia ocurre al principio del texto
   if lastMatchPos < textLen div 2:
     score *= 1.2
 
-  # --- BOOST DE EXACTITUD ---
-  # Si la longitud es idéntica y hemos llegado hasta aquí (encontrando todos los caracteres),
-  # es una coincidencia exacta. Multiplicamos masivamente.
   if query.len == textLen:
     score *= 5.0
 

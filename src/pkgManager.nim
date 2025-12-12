@@ -1,9 +1,10 @@
-import std/[os, osproc, strutils, strformat, tables, streams]
+import std/[os, osproc, strutils, strformat, tables, streams, json, sets]
 import types, utils
 
 type
   WorkerReqKind = enum
     ReqLoadAll
+    ReqLoadNimble
     ReqSearch
     ReqDetails
     ReqStop
@@ -15,6 +16,7 @@ type
     pkgName: string
     pkgRepo: string
     searchId: int
+    source: DataSource
 
   WorkerRes = Msg
 
@@ -32,7 +34,6 @@ proc parseSingleLine(
 ): CompactPackage =
   var i = 0
   let L = line.len
-
   let rStart = i
   while i < L and line[i] != ' ':
     inc(i)
@@ -40,7 +41,6 @@ proc parseSingleLine(
     return
   let repoName = line[rStart ..< i]
   inc(i)
-
   let nStart = i
   while i < L and line[i] != ' ':
     inc(i)
@@ -51,24 +51,20 @@ proc parseSingleLine(
   let nameOffset = int32(pool.len)
   pool.add(nameStr)
   inc(i)
-
   let vStart = i
   while i < L and line[i] != ' ':
     inc(i)
   let verLen = i - vStart
   let verOffset = int32(pool.len)
   pool.add(line[vStart ..< i])
-
   var isInst = false
   if installedMap.hasKey(nameStr):
     isInst = true
   elif line.find("[installed]") > 0 or line.find("[instalado]") > 0:
     isInst = true
-
   if not repoMap.hasKey(repoName):
     repoMap[repoName] = uint8(repos.len)
     repos.add(repoName)
-
   result = CompactPackage(
     repoIdx: repoMap[repoName],
     nameOffset: nameOffset,
@@ -79,42 +75,33 @@ proc parseSingleLine(
   )
 
 proc parseSearchResults(lines: string): (seq[CompactPackage], string, seq[string]) =
-  var
-    pkgs = newSeqOfCap[CompactPackage](100)
-    pool = newStringOfCap(10 * 1024)
-    repos: seq[string] = @[]
-    repoMap = initTable[string, uint8]()
-
+  var pkgs = newSeqOfCap[CompactPackage](100)
+  var pool = newStringOfCap(10 * 1024)
+  var repos: seq[string] = @[]
+  var repoMap = initTable[string, uint8]()
   for rawLine in lines.splitLines:
     if rawLine.len == 0:
       continue
     if rawLine.startsWith("    "):
       continue
-
     let line = stripAnsi(rawLine)
     let parts = line.split(' ')
     if parts.len < 2:
       continue
-
     let repoNameParts = parts[0].split('/')
     if repoNameParts.len < 2:
       continue
-
     let repoName = repoNameParts[0]
     let name = repoNameParts[1]
     let ver = parts[1]
-
     let isInst = line.contains("[installed]") or line.contains("[instalado]")
-
     let nameOffset = int32(pool.len)
     pool.add(name)
     let verOffset = int32(pool.len)
     pool.add(ver)
-
     if not repoMap.hasKey(repoName):
       repoMap[repoName] = uint8(repos.len)
       repos.add(repoName)
-
     pkgs.add(
       CompactPackage(
         repoIdx: repoMap[repoName],
@@ -125,7 +112,6 @@ proc parseSearchResults(lines: string): (seq[CompactPackage], string, seq[string
         isInstalled: isInst,
       )
     )
-
   return (pkgs, pool, repos)
 
 proc workerLoop(tool: string) {.thread.} =
@@ -142,24 +128,19 @@ proc workerLoop(tool: string) {.thread.} =
           let parts = l.split(' ')
           if parts.len > 1:
             instMap[parts[0]] = parts[1]
-
         var p = startProcess("pacman", args = ["-Sl"], options = {poUsePath})
         var outp = p.outputStream
         var line = ""
-
         var batchPkgs = newSeqOfCap[CompactPackage](1000)
         var batchPool = newStringOfCap(32 * 1024)
         var batchRepos: seq[string] = @[]
         var batchRepoMap = initTable[string, uint8]()
-
         while outp.readLine(line):
           if line.len == 0:
             continue
-
           let pkg = parseSingleLine(line, batchPool, batchRepoMap, batchRepos, instMap)
           if pkg.nameLen > 0:
             batchPkgs.add(pkg)
-
           if batchPkgs.len >= 500:
             resChan.send(
               Msg(
@@ -171,12 +152,10 @@ proc workerLoop(tool: string) {.thread.} =
                 isAppend: true,
               )
             )
-
             batchPkgs = newSeqOfCap[CompactPackage](1000)
             batchPool = newStringOfCap(32 * 1024)
             batchRepos = @[]
             batchRepoMap = initTable[string, uint8]()
-
         if batchPkgs.len > 0:
           resChan.send(
             Msg(
@@ -188,13 +167,64 @@ proc workerLoop(tool: string) {.thread.} =
               isAppend: true,
             )
           )
-
         p.close()
+      of ReqLoadNimble:
+        var installedSet = initHashSet[string]()
+        let (listOut, _) = execCmdEx("nimble list -i --noColor")
+        for line in listOut.splitLines:
+          let parts = line.split(' ')
+          if parts.len > 0 and parts[0].len > 0:
+            installedSet.incl(parts[0])
+        let nimbleDir = getHomeDir() / ".nimble"
+        let pkgFile = nimbleDir / "packages_official.json"
+        if not fileExists(pkgFile):
+          resChan.send(
+            Msg(
+              kind: MsgError,
+              errMsg: "package_official.json not found. Run 'nimble refresh'.",
+            )
+          )
+          continue
+        let jsonContent = readFile(pkgFile)
+        let jsonNode = parseJson(jsonContent)
+        var pkgs = newSeqOfCap[CompactPackage](jsonNode.len)
+        var pool = newStringOfCap(256 * 1024)
+        var repos = @["nimble"]
+        let repoIdx = 0'u8
+        for p in jsonNode:
+          let name = p.getOrDefault("name").getStr("")
+          if name.len == 0:
+            continue
+          let ver = "latest"
+          let nameOffset = int32(pool.len)
+          pool.add(name)
+          let verOffset = int32(pool.len)
+          pool.add(ver)
+          let isInst = name in installedSet
+          pkgs.add(
+            CompactPackage(
+              repoIdx: repoIdx,
+              nameOffset: nameOffset,
+              nameLen: int16(name.len),
+              verOffset: verOffset,
+              verLen: int16(ver.len),
+              isInstalled: isInst,
+            )
+          )
+        resChan.send(
+          Msg(
+            kind: MsgSearchResults,
+            packedPkgs: pkgs,
+            poolData: pool,
+            repos: repos,
+            searchId: 0,
+            isAppend: false,
+          )
+        )
       of ReqSearch:
         if tool != "pacman" and req.query.len > 2:
           let cmd = fmt"{tool} -Ss --aur {sanitizeShell(req.query)}"
           let (outp, code) = execCmdEx(cmd)
-
           if code == 0 and outp.len > 0:
             let (pkgs, pool, repos) = parseSearchResults(outp)
             resChan.send(
@@ -208,18 +238,32 @@ proc workerLoop(tool: string) {.thread.} =
               )
             )
       of ReqDetails:
-        let target =
-          if req.pkgRepo == "local":
-            req.pkgName
+        if req.source == SourceNimble:
+          let cmd = fmt"nimble search {sanitizeShell(req.pkgName)}"
+          let (outp, code) = execCmdEx(cmd)
+          if code == 0:
+            resChan.send(Msg(kind: MsgDetailsLoaded, pkgId: req.pkgId, content: outp))
           else:
-            fmt"{req.pkgRepo}/{req.pkgName}"
-        let cmd =
-          if req.pkgRepo == "local":
-            fmt"pacman -Qi {target}"
-          else:
-            fmt"{tool} -Si {target}"
-        let (outp, _) = execCmdEx(cmd)
-        resChan.send(Msg(kind: MsgDetailsLoaded, pkgId: req.pkgId, content: outp))
+            resChan.send(
+              Msg(
+                kind: MsgDetailsLoaded,
+                pkgId: req.pkgId,
+                content: "Details could not be retrieved.",
+              )
+            )
+        else:
+          let target =
+            if req.pkgRepo == "local":
+              req.pkgName
+            else:
+              fmt"{req.pkgRepo}/{req.pkgName}"
+          let cmd =
+            if req.pkgRepo == "local":
+              fmt"pacman -Qi {target}"
+            else:
+              fmt"{tool} -Si {target}"
+          let (outp, _) = execCmdEx(cmd)
+          resChan.send(Msg(kind: MsgDetailsLoaded, pkgId: req.pkgId, content: outp))
     except Exception as e:
       resChan.send(Msg(kind: MsgError, errMsg: e.msg))
 
@@ -244,11 +288,16 @@ proc shutdownPackageManager*() =
 proc requestLoadAll*() =
   reqChan.send(WorkerReq(kind: ReqLoadAll))
 
+proc requestLoadNimble*() =
+  reqChan.send(WorkerReq(kind: ReqLoadNimble))
+
 proc requestSearch*(query: string, id: int) =
   reqChan.send(WorkerReq(kind: ReqSearch, query: query, searchId: id))
 
-proc requestDetails*(id, name, repo: string) =
-  reqChan.send(WorkerReq(kind: ReqDetails, pkgId: id, pkgName: name, pkgRepo: repo))
+proc requestDetails*(id, name, repo: string, source: DataSource) =
+  reqChan.send(
+    WorkerReq(kind: ReqDetails, pkgId: id, pkgName: name, pkgRepo: repo, source: source)
+  )
 
 proc pollWorkerMessages*(): seq[Msg] =
   result = @[]
@@ -258,36 +307,91 @@ proc pollWorkerMessages*(): seq[Msg] =
       break
     result.add(msg)
 
-proc installPackages*(names: seq[string]): int =
+proc installPackages*(names: seq[string], source: DataSource): int =
   if names.len == 0:
     return 0
-  let tool =
-    if findExe("paru").len > 0:
-      "paru"
-    elif findExe("yay").len > 0:
-      "yay"
-    else:
-      "pacman"
-  var cmd = ""
-  if tool == "pacman":
-    cmd = "sudo pacman -S "
-  else:
-    cmd = tool & " -S "
-  return execCmd(cmd & names.join(" "))
 
-proc uninstallPackages*(names: seq[string]): int =
+  if source == SourceNimble:
+    var cleanNames: seq[string] = @[]
+    for n in names:
+      if n.contains('/'):
+        cleanNames.add(n.split('/')[1])
+      else:
+        cleanNames.add(n)
+
+    # Simulación de prompt tipo Pacman
+    stdout.write("\n")
+    stdout.write(fmt"{AnsiBold}Nimble Packages ({cleanNames.len}){AnsiReset}")
+    stdout.write("\n\n")
+
+    for n in cleanNames:
+      stdout.write(fmt"  {ColorPkg}{n}{AnsiReset} (latest)\n")
+
+    stdout.write("\n")
+    stdout.write(fmt"{AnsiBold}:: Continue with the installation? [Y/n] {AnsiReset}")
+    stdout.flushFile()
+
+    let answer = stdin.readLine().toLowerAscii()
+    if answer == "" or answer == "s" or answer == "y":
+      return execCmd("nimble install " & cleanNames.join(" "))
+    else:
+      stdout.write("Operation cancelled.\n")
+      return 1
+  else:
+    let tool =
+      if findExe("paru").len > 0:
+        "paru"
+      elif findExe("yay").len > 0:
+        "yay"
+      else:
+        "pacman"
+    var cmd = ""
+    if tool == "pacman":
+      cmd = "sudo pacman -S "
+    else:
+      cmd = tool & " -S "
+    return execCmd(cmd & names.join(" "))
+
+proc uninstallPackages*(names: seq[string], source: DataSource): int =
   if names.len == 0:
     return 0
-  let tool =
-    if findExe("paru").len > 0:
-      "paru"
-    elif findExe("yay").len > 0:
-      "yay"
+
+  if source == SourceNimble:
+    var cleanNames: seq[string] = @[]
+    for n in names:
+      if n.contains('/'):
+        cleanNames.add(n.split('/')[1])
+      else:
+        cleanNames.add(n)
+
+    stdout.write("\n")
+    stdout.write(fmt"{AnsiBold}Nimble Packages to DELETE ({cleanNames.len}){AnsiReset}")
+    stdout.write("\n\n")
+
+    for n in cleanNames:
+      stdout.write(fmt"  {ColorPkg}{n}{AnsiReset}\n")
+
+    stdout.write("\n")
+    stdout.write(fmt"{AnsiBold}:: Continue with uninstalling? [Y/n] {AnsiReset}")
+    stdout.flushFile()
+
+    let answer = stdin.readLine().toLowerAscii()
+    if answer == "" or answer == "s" or answer == "y":
+      return execCmd("nimble uninstall " & cleanNames.join(" "))
     else:
-      "pacman"
-  var cmd = ""
-  if tool == "pacman":
-    cmd = "sudo pacman -R "
+      stdout.write("Operation cancelled.\n")
+      return 1
   else:
-    cmd = tool & " -R "
-  return execCmd(cmd & names.join(" "))
+    let tool =
+      if findExe("paru").len > 0:
+        "paru"
+      elif findExe("yay").len > 0:
+        "yay"
+      else:
+        "pacman"
+    var cmd = ""
+    if tool == "pacman":
+      cmd = "sudo pacman -R "
+    else:
+      cmd = tool & " -R "
+    return execCmd(cmd & names.join(" "))

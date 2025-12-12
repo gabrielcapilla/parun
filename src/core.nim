@@ -1,5 +1,6 @@
 import std/[strutils, sets, tables, algorithm, math]
-import types, simd
+import types, pkgManager
+import simd
 
 template getName*(state: AppState, p: CompactPackage): string =
   state.stringPool[int(p.nameOffset) ..< int(p.nameOffset) + int(p.nameLen)]
@@ -68,7 +69,7 @@ func filterBySelection(state: AppState): seq[int32] =
       result.add(int32(i))
 
 func newState*(
-    initialMode: SearchMode, initialShowDetails: bool, useVim: bool
+    initialMode: SearchMode, initialShowDetails: bool, useVim: bool, startNimble: bool
 ): AppState =
   AppState(
     pkgs: @[],
@@ -90,6 +91,7 @@ func newState*(
     detailScroll: 0,
     viewingSelection: false,
     inputMode: if useVim: ModeVimNormal else: ModeStandard,
+    dataSource: if startNimble: SourceNimble else: SourceSystem,
   )
 
 func toggleSelection(state: var AppState) =
@@ -188,7 +190,7 @@ func handleVimNormal(state: var AppState, k: char, listHeight: int) =
   else:
     discard
 
-func update*(state: AppState, msg: Msg, listHeight: int): AppState =
+proc update*(state: AppState, msg: Msg, listHeight: int): AppState =
   result = state
   result.needsRedraw = true
 
@@ -198,16 +200,37 @@ func update*(state: AppState, msg: Msg, listHeight: int): AppState =
 
     if result.inputMode != ModeVimCommand:
       if k == KeyCtrlA:
-        if result.searchMode == ModeLocal:
-          result.searchMode = ModeHybrid
+        if result.dataSource == SourceSystem:
+          if result.searchMode == ModeLocal:
+            result.searchMode = ModeHybrid
+          else:
+            result.searchMode = ModeLocal
+            if result.localPkgCount > 0:
+              result.pkgs.setLen(result.localPkgCount)
+              result.stringPool.setLen(result.localPoolLen)
+              result.repoList.setLen(result.localRepoCount)
+              result.visibleIndices = filterIndices(result, result.searchBuffer)
+              result.cursor = 0
+        return
+
+      if k == KeyCtrlN:
+        result.pkgs = @[]
+        result.stringPool = ""
+        result.repoList = @[]
+        result.visibleIndices = @[]
+        result.selected = initHashSet[string]()
+        result.cursor = 0
+        result.scroll = 0
+        result.detailsCache = initTable[string, string]()
+        result.localPkgCount = 0
+
+        if result.dataSource == SourceSystem:
+          result.dataSource = SourceNimble
+          requestLoadNimble()
         else:
+          result.dataSource = SourceSystem
           result.searchMode = ModeLocal
-          if result.localPkgCount > 0:
-            result.pkgs.setLen(result.localPkgCount)
-            result.stringPool.setLen(result.localPoolLen)
-            result.repoList.setLen(result.localRepoCount)
-            result.visibleIndices = filterIndices(result, result.searchBuffer)
-            result.cursor = 0
+          requestLoadAll()
         return
 
       if k == KeyCtrlS:

@@ -29,7 +29,7 @@ func renderRow(
   var content = fmt"{cR}{repo}{rst}/{cN}{AnsiBold}{name}{rst} {cV}{ver}{rst}"
 
   if p.isInstalled:
-    content.add(fmt" {cS}[instalado]{rst}")
+    content.add(fmt" {cS}[installed]{rst}")
 
   if isSelected:
     content =
@@ -103,7 +103,7 @@ func renderUi*(state: AppState, termH, termW: int): RenderResult =
               textContent = dLines[effectiveDetailIdx].replace("\t", "  ")
           else:
             if contentRowIndex == 0:
-              textContent = "Cargando..."
+              textContent = "Loading..."
 
         let visLen = visibleWidth(textContent)
         if visLen > detailTextW:
@@ -132,7 +132,9 @@ func renderUi*(state: AppState, termH, termW: int): RenderResult =
   if state.inputMode == ModeVimCommand:
     modeStr = fmt"{ColorVimCommand} COMMAND {AnsiReset}"
   elif state.viewingSelection:
-    modeStr = fmt"{ColorModeReview}[REVISIÓN]{AnsiReset}"
+    modeStr = fmt"{ColorModeReview}[Rev]{AnsiReset}"
+  elif state.dataSource == SourceNimble:
+    modeStr = fmt"{ColorModeNimble}[Nimble]{AnsiReset}"
   elif state.inputMode == ModeVimNormal:
     modeStr = fmt"{ColorVimNormal} NORMAL {AnsiReset}"
   elif state.inputMode == ModeVimInsert:
@@ -143,7 +145,7 @@ func renderUi*(state: AppState, termH, termW: int): RenderResult =
     modeStr = fmt"{ColorModeHybrid}[Local+AUR]{AnsiReset}"
 
   if (state.inputMode == ModeVimNormal or state.inputMode == ModeVimInsert) and
-      state.searchMode == ModeHybrid:
+      state.searchMode == ModeHybrid and state.dataSource == SourceSystem:
     modeStr.add(fmt" {ColorModeHybrid}[AUR]{AnsiReset}")
 
   var leftSide = ""
@@ -151,16 +153,12 @@ func renderUi*(state: AppState, termH, termW: int): RenderResult =
 
   if state.inputMode == ModeVimCommand:
     leftSide = fmt"{ColorPrompt}:{AnsiReset}{state.commandBuffer}"
-
     cursorVisualX = 1 + visibleWidth(state.commandBuffer)
   else:
     let promptChar = if state.inputMode == ModeVimNormal: ":" else: ">"
     leftSide = fmt"{ColorPrompt}{promptChar}{AnsiReset} {state.searchBuffer}"
-
     let textBeforeCursor = state.searchBuffer[0 ..< state.searchCursor]
     cursorVisualX = 2 + visibleWidth(textBeforeCursor)
-
-  let leftSideVisTotal = visibleWidth(leftSide)
 
   let leftSideClean =
     if state.inputMode == ModeVimCommand:

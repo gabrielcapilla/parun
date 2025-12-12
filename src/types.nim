@@ -10,6 +10,7 @@ const
   KeyBackspace* = char(8)
   KeyTab* = char(9)
   KeyEnter* = char(13)
+  KeyCtrlN* = char(14)
   KeyCtrlR* = char(18)
   KeyCtrlS* = char(19)
   KeyCtrlU* = char(21)
@@ -46,6 +47,7 @@ const
 
   ColorModeLocal* = "\e[1;32m"
   ColorModeHybrid* = "\e[1;35m"
+  ColorModeNimble* = "\e[1;33m"
   ColorModeReview* = "\e[1;33m"
   ColorVimNormal* = "\e[1;44;97m"
   ColorVimInsert* = "\e[1;42;97m"
@@ -63,6 +65,10 @@ type
   SearchMode* = enum
     ModeLocal
     ModeHybrid
+
+  DataSource* = enum
+    SourceSystem
+    SourceNimble
 
   InputMode* = enum
     ModeStandard
@@ -116,6 +122,7 @@ type
     commandBuffer*: string
 
     searchMode*: SearchMode
+    dataSource*: DataSource
     inputMode*: InputMode
     viewingSelection*: bool
 

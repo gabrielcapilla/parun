@@ -7,7 +7,6 @@ proc initRawMode(): Termios =
   raw.c_iflag = raw.c_iflag and not (ICRNL or IXON)
   raw.c_lflag = raw.c_lflag and not (ECHO or ICANON or ISIG or IEXTEN)
   discard tcSetAttr(STDIN_FILENO, TCSAFLUSH, addr raw)
-
   var flags = fcntl(STDIN_FILENO, F_GETFL, 0)
   discard fcntl(STDIN_FILENO, F_SETFL, flags or O_NONBLOCK)
 
@@ -45,6 +44,8 @@ proc readInputSafe(): char =
     return KeyCtrlA
   if b1 == 19:
     return KeyCtrlS
+  if b1 == 14:
+    return KeyCtrlN
 
   if b1 == 21:
     return KeyCtrlU
@@ -131,6 +132,7 @@ proc main() =
     startMode = ModeLocal
     startShowDetails = true
     useVim = false
+    startNimble = false
 
   var p = initOptParser()
   for kind, key, val in p.getopt():
@@ -143,6 +145,8 @@ proc main() =
         startShowDetails = false
       of "vim":
         useVim = true
+      of "nimble":
+        startNimble = true
       else:
         discard
     else:
@@ -154,8 +158,12 @@ proc main() =
 
   initPackageManager()
 
-  var state = newState(startMode, startShowDetails, useVim)
-  requestLoadAll()
+  var state = newState(startMode, startShowDetails, useVim, startNimble)
+
+  if startNimble:
+    requestLoadNimble()
+  else:
+    requestLoadAll()
 
   let selector = newSelector[int]()
   selector.registerHandle(STDIN_FILENO, {Event.Read}, 0)
@@ -192,11 +200,12 @@ proc main() =
         stdout.flushFile()
         discard tcSetAttr(STDIN_FILENO, TCSAFLUSH, addr origTerm)
         restoreBlockingMode()
+
         let code =
           if state.shouldInstall:
-            installPackages(targets)
+            installPackages(targets, state.dataSource)
           else:
-            uninstallPackages(targets)
+            uninstallPackages(targets, state.dataSource)
         quit(code)
       else:
         state.shouldInstall = false
@@ -225,7 +234,8 @@ proc main() =
         let id = state.getPkgId(idx)
         if not state.detailsCache.hasKey(id):
           let p = state.pkgs[int(idx)]
-          requestDetails(id, state.getName(p), state.getRepo(p))
+
+          requestDetails(id, state.getName(p), state.getRepo(p), state.dataSource)
 
     let ready = selector.select(20)
     if ready.len > 0:
@@ -242,13 +252,14 @@ proc main() =
         let shouldCheckNetwork = (isEditing and inInsert) or isToggle
 
         if shouldCheckNetwork and not state.viewingSelection:
-          let hasAurPrefix = state.searchBuffer.startsWith("aur/")
-          let effectiveQuery = getEffectiveQuery(state.searchBuffer)
-          let active = (state.searchMode == ModeHybrid) or hasAurPrefix
+          if state.dataSource == SourceSystem:
+            let hasAurPrefix = state.searchBuffer.startsWith("aur/")
+            let effectiveQuery = getEffectiveQuery(state.searchBuffer)
+            let active = (state.searchMode == ModeHybrid) or hasAurPrefix
 
-          if active and effectiveQuery.len > 2:
-            state.searchId.inc()
-            requestSearch(effectiveQuery, state.searchId)
+            if active and effectiveQuery.len > 2:
+              state.searchId.inc()
+              requestSearch(effectiveQuery, state.searchId)
 
     for msg in pollWorkerMessages():
       let listH = max(1, terminalHeight() - 2)
