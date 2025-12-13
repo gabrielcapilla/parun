@@ -1,11 +1,17 @@
 import std/[strutils, sets, tables, algorithm, math]
 import types, simd, pkgManager
 
+const MaxDetailsCache = 50
+
 template getName*(state: AppState, p: CompactPackage): string =
-  state.stringPool[int(p.nameOffset) ..< int(p.nameOffset) + int(p.nameLen)]
+  state.stringPool[int(p.offset) ..< int(p.offset) + int(p.nameLen)]
 
 template getVersion*(state: AppState, p: CompactPackage): string =
-  state.stringPool[int(p.verOffset) ..< int(p.verOffset) + int(p.verLen)]
+  let start = int(p.offset) + int(p.nameLen) + 1
+  var curr = start
+  while curr < state.stringPool.len and state.stringPool[curr] != '\0':
+    inc(curr)
+  state.stringPool[start ..< curr]
 
 template getRepo*(state: AppState, p: CompactPackage): string =
   state.repoList[int(p.repoIdx)]
@@ -33,7 +39,7 @@ func filterIndices(state: AppState, query: string): seq[int32] =
   if tokens.len == 0:
     return @[]
 
-  var scored = newSeqOfCap[tuple[idx: int32, score: int]](state.pkgs.len div 4)
+  var scored = newSeqOfCap[tuple[idx: int32, score: int]](min(2000, state.pkgs.len))
 
   for i in 0 ..< state.pkgs.len:
     let p = state.pkgs[i]
@@ -41,7 +47,7 @@ func filterIndices(state: AppState, query: string): seq[int32] =
     var allTokensMatch = true
 
     for token in tokens:
-      let s = scorePackageSimd(state.stringPool, p.nameOffset, p.nameLen, token)
+      let s = scorePackageSimd(state.stringPool, p.offset, int16(p.nameLen), token)
       if s == 0:
         allTokensMatch = false
         break
@@ -71,9 +77,9 @@ func newState*(
     initialMode: SearchMode, initialShowDetails: bool, useVim: bool, startNimble: bool
 ): AppState =
   AppState(
-    pkgs: @[],
+    pkgs: newSeqOfCap[CompactPackage](0),
     visibleIndices: @[],
-    stringPool: newStringOfCap(4 * 1024 * 1024),
+    stringPool: newStringOfCap(1024),
     repoList: @[],
     localPkgCount: 0,
     localPoolLen: 0,
@@ -91,6 +97,7 @@ func newState*(
     viewingSelection: false,
     inputMode: if useVim: ModeVimNormal else: ModeStandard,
     dataSource: if startNimble: SourceNimble else: SourceSystem,
+    searchId: 1,
   )
 
 func toggleSelection(state: var AppState) =
@@ -213,9 +220,11 @@ proc update*(state: AppState, msg: Msg, listHeight: int): AppState =
         return
 
       if k == KeyCtrlN:
-        result.pkgs = @[]
-        result.stringPool = ""
-        result.repoList = @[]
+        result.searchId.inc()
+        result.pkgs = newSeqOfCap[CompactPackage](0)
+        result.stringPool = newStringOfCap(4096)
+        result.repoList = newSeq[string]()
+
         result.visibleIndices = @[]
         result.selected = initHashSet[string]()
         result.cursor = 0
@@ -225,11 +234,11 @@ proc update*(state: AppState, msg: Msg, listHeight: int): AppState =
 
         if result.dataSource == SourceSystem:
           result.dataSource = SourceNimble
-          requestLoadNimble()
+          requestLoadNimble(result.searchId)
         else:
           result.dataSource = SourceSystem
           result.searchMode = ModeLocal
-          requestLoadAll()
+          requestLoadAll(result.searchId)
         return
 
       if k == KeyCtrlS:
@@ -316,21 +325,11 @@ proc update*(state: AppState, msg: Msg, listHeight: int): AppState =
     else:
       result.scroll = 0
   of MsgSearchResults:
+    if msg.searchId != result.searchId:
+      return result
+
     if msg.isAppend:
-      if msg.searchId > 0 and msg.searchId != result.searchId:
-        return result
-
-      if msg.searchId > 0:
-        if result.localPkgCount > 0:
-          result.pkgs.setLen(result.localPkgCount)
-          result.stringPool.setLen(result.localPoolLen)
-          result.repoList.setLen(result.localRepoCount)
-        else:
-          result.pkgs = @[]
-          result.stringPool = ""
-          result.repoList = @[]
-
-      var remoteRepoMap = newSeq[uint8](msg.repos.len)
+      var remoteRepoMap = newSeq[uint16](msg.repos.len)
       for i, r in msg.repos:
         var found = -1
         for j, existing in result.repoList:
@@ -338,10 +337,10 @@ proc update*(state: AppState, msg: Msg, listHeight: int): AppState =
             found = j
             break
         if found == -1:
-          remoteRepoMap[i] = uint8(result.repoList.len)
+          remoteRepoMap[i] = uint16(result.repoList.len)
           result.repoList.add(r)
         else:
-          remoteRepoMap[i] = uint8(found)
+          remoteRepoMap[i] = uint16(found)
 
       let baseOffset = int32(result.stringPool.len)
       result.stringPool.add(msg.poolData)
@@ -349,11 +348,10 @@ proc update*(state: AppState, msg: Msg, listHeight: int): AppState =
       for p in msg.packedPkgs:
         var newP = p
         newP.repoIdx = remoteRepoMap[p.repoIdx]
-        newP.nameOffset += baseOffset
-        newP.verOffset += baseOffset
+        newP.offset += baseOffset
         result.pkgs.add(newP)
 
-      if msg.searchId == 0:
+      if result.searchBuffer.len == 0 or result.dataSource == SourceNimble:
         result.localPkgCount = result.pkgs.len
         result.localPoolLen = result.stringPool.len
         result.localRepoCount = result.repoList.len
@@ -386,6 +384,8 @@ proc update*(state: AppState, msg: Msg, listHeight: int): AppState =
     result.isSearching = false
     result.justReceivedSearchResults = true
   of MsgDetailsLoaded:
+    if result.detailsCache.len >= MaxDetailsCache:
+      result.detailsCache.clear()
     result.detailsCache[msg.pkgId] = msg.content
   of MsgError:
     result.searchBuffer = "Error: " & msg.errMsg

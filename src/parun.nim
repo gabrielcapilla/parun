@@ -161,9 +161,9 @@ proc main() =
   var state = newState(startMode, startShowDetails, useVim, startNimble)
 
   if startNimble:
-    requestLoadNimble()
+    requestLoadNimble(state.searchId)
   else:
-    requestLoadAll()
+    requestLoadAll(state.searchId)
 
   let selector = newSelector[int]()
   selector.registerHandle(STDIN_FILENO, {Event.Read}, 0)

@@ -10,39 +10,86 @@ const
   BoxVer = "│"
   ColorFrame = "\e[90m"
 
+  Reset = "\e[0m"
+  CursorPrefixSel = "\e[93m* "
+  CursorPrefixUnsel = "\e[93m*\e[0m "
+  NormalPrefix = "  "
+  SepSlash = "/"
+  Space = " "
+  InstalledTag = " \e[36m[installed]\e[0m"
+
+  Spaces50 = "                                                  "
+
 type RenderResult* = tuple[frame: string, cursorX: int, cursorY: int]
 
-func renderRow(
-    state: AppState, idx: int32, width: int, isCursor, isSelected: bool
-): string =
+func appendRow(
+    buffer: var string,
+    state: AppState,
+    idx: int32,
+    width: int,
+    isCursor, isSelected: bool,
+) =
   let p = state.pkgs[int(idx)]
-  let repo = state.getRepo(p)
-  let name = state.getName(p)
-  let ver = state.getVersion(p)
-
-  let (cR, cN, cV, cS, rst) =
-    if isCursor or isSelected:
-      ("", "", "", "", "")
-    else:
-      (ColorRepo, ColorPkg, ColorVer, ColorState, AnsiReset)
-
-  var content = fmt"{cR}{repo}{rst}/{cN}{AnsiBold}{name}{rst} {cV}{ver}{rst}"
-
-  if p.isInstalled:
-    content.add(fmt" {cS}[installed]{rst}")
-
-  if isSelected:
-    content =
-      (if isCursor: fmt"{ColorSel}* " else: fmt"{ColorSel}*{AnsiReset} ") & content
-  else:
-    content = "  " & content
 
   if isCursor:
-    let vLen = visibleWidth(content)
-    let pad = max(0, width - vLen)
-    result = ColorHighlightBg & content & repeat(" ", pad) & AnsiReset
+    buffer.add(ColorHighlightBg)
+
+  if isSelected:
+    if isCursor:
+      buffer.add(CursorPrefixSel)
+    else:
+      buffer.add(CursorPrefixUnsel)
   else:
-    result = content
+    buffer.add(NormalPrefix)
+
+  if isCursor or isSelected:
+    buffer.add(state.getRepo(p))
+    buffer.add(SepSlash)
+    buffer.add(state.getName(p))
+    buffer.add(Space)
+    buffer.add(state.getVersion(p))
+  else:
+    buffer.add(ColorRepo)
+    buffer.add(state.getRepo(p))
+    buffer.add(Reset)
+    buffer.add(SepSlash)
+    buffer.add(ColorPkg)
+    buffer.add(AnsiBold)
+    buffer.add(state.getName(p))
+    buffer.add(Reset)
+    buffer.add(Space)
+    buffer.add(ColorVer)
+    buffer.add(state.getVersion(p))
+    buffer.add(Reset)
+
+  if p.isInstalled:
+    buffer.add(InstalledTag)
+
+  if isCursor:
+    let contentStr =
+      (if isSelected: "* " else: "  ") & state.getRepo(p) & "/" & state.getName(p) & " " &
+      state.getVersion(p) & (if p.isInstalled: " [installed]" else: "")
+
+    let vLen = contentStr.len
+    let pad = max(0, width - vLen)
+
+    if pad > 0:
+      var p = pad
+      while p >= 50:
+        buffer.add(Spaces50)
+        p -= 50
+      if p > 0:
+        buffer.add(Spaces50[0 ..< p])
+
+    buffer.add(Reset)
+  else:
+    let contentStr =
+      (if isSelected: "* " else: "  ") & state.getRepo(p) & "/" & state.getName(p) & " " &
+      state.getVersion(p) & (if p.isInstalled: " [installed]" else: "")
+
+    let vLen = contentStr.len
+    if vLen < width:
+      buffer.add(repeat(" ", width - vLen))
 
 func renderUi*(state: AppState, termH, termW: int): RenderResult =
   let listH = max(1, termH - 2)
@@ -60,36 +107,38 @@ func renderUi*(state: AppState, termH, termW: int): RenderResult =
       0
   let detailTextW = max(0, detailTotalW - 2)
 
-  var buffer = newStringOfCap(termH * termW + 2048)
+  var buffer = newStringOfCap(termH * termW + 4096)
 
   for r in 0 ..< listH:
     let idx = state.scroll + (listH - 1 - r)
-    var line = ""
 
     if idx >= 0 and idx < state.visibleIndices.len:
       let realIdx = state.visibleIndices[idx]
       let pId = state.getPkgId(realIdx)
       let isSel = pId in state.selected
-      let rowContent = renderRow(state, realIdx, listW, idx == state.cursor, isSel)
 
-      line.add(rowContent)
-      let vis = visibleWidth(rowContent)
-      if vis < listW:
-        line.add(repeat(" ", listW - vis))
+      appendRow(buffer, state, realIdx, listW, idx == state.cursor, isSel)
     else:
-      line.add(repeat(" ", listW))
+      buffer.add(repeat(" ", listW))
 
     if showDetails:
       if r == 0:
-        line.add(
-          fmt"{ColorFrame}{BoxTopLeft}{repeat(BoxHor, detailTextW)}{BoxTopRight}{AnsiReset}"
-        )
+        buffer.add(ColorFrame)
+        buffer.add(BoxTopLeft)
+        buffer.add(repeat(BoxHor, detailTextW))
+        buffer.add(BoxTopRight)
+        buffer.add(Reset)
       elif r == listH - 1:
-        line.add(
-          fmt"{ColorFrame}{BoxBottomLeft}{repeat(BoxHor, detailTextW)}{BoxBottomRight}{AnsiReset}"
-        )
+        buffer.add(ColorFrame)
+        buffer.add(BoxBottomLeft)
+        buffer.add(repeat(BoxHor, detailTextW))
+        buffer.add(BoxBottomRight)
+        buffer.add(Reset)
       else:
-        line.add(fmt"{ColorFrame}{BoxVer}{AnsiReset}")
+        buffer.add(ColorFrame)
+        buffer.add(BoxVer)
+        buffer.add(Reset)
+
         let contentRowIndex = r - 1
         var textContent = ""
         if state.visibleIndices.len > 0:
@@ -107,15 +156,20 @@ func renderUi*(state: AppState, termH, termW: int): RenderResult =
 
         let visLen = visibleWidth(textContent)
         if visLen > detailTextW:
-          line.add(truncate(textContent, detailTextW))
+          buffer.add(truncate(textContent, detailTextW))
         else:
-          line.add(textContent & repeat(" ", detailTextW - visLen))
-        line.add(fmt"{ColorFrame}{BoxVer}{AnsiReset}")
+          buffer.add(textContent)
+          buffer.add(repeat(" ", detailTextW - visLen))
 
-    buffer.add(line)
+        buffer.add(ColorFrame)
+        buffer.add(BoxVer)
+        buffer.add(Reset)
+
     buffer.add("\n")
 
-  buffer.add(fmt"{ColorFrame}{repeat(BoxHor, termW)}{AnsiReset}")
+  buffer.add(ColorFrame)
+  buffer.add(repeat(BoxHor, termW))
+  buffer.add(Reset)
   buffer.add("\n")
 
   let pkgCountStr =
@@ -172,6 +226,8 @@ func renderUi*(state: AppState, termH, termW: int): RenderResult =
 
   let spacing = max(0, termW - leftLen - rightLen)
 
-  buffer.add(leftSide & repeat(" ", spacing) & rightSide)
+  buffer.add(leftSide)
+  buffer.add(repeat(" ", spacing))
+  buffer.add(rightSide)
 
   return (frame: buffer, cursorX: cursorVisualX, cursorY: termH)

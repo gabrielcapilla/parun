@@ -55,12 +55,11 @@ const
 
 type
   CompactPackage* = object
-    repoIdx*: uint8
-    nameOffset*: int32
-    nameLen*: int16
-    verOffset*: int32
-    verLen*: int16
-    isInstalled*: bool
+    offset*: int32
+    repoIdx*: uint16
+    nameLen*: uint8
+    flags*: uint8
+    padding*: uint8
 
   SearchMode* = enum
     ModeLocal
@@ -136,3 +135,6 @@ type
     justReceivedSearchResults*: bool
 
     detailScroll*: int
+
+func isInstalled*(p: CompactPackage): bool {.inline.} =
+  (p.flags and 1) != 0
