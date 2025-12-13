@@ -1,123 +1,125 @@
 import nimsimd/sse2
-import std/bitops
+import std/[bitops, strutils]
 
 const VectorSize = 16
 
+type SearchContext* = object
+  isValid*: bool
+  tokens*: seq[string]
+  firstCharVecs*: seq[M128i]
+
 func toLowerSimd(ch: M128i): M128i {.inline.} =
-  let upperTest = mm_and_si128(
-    mm_cmpgt_epi8(mm_set1_epi8(0x5B), ch), mm_cmpgt_epi8(ch, mm_set1_epi8(0x40))
-  )
-  let toLowerAdd = mm_and_si128(upperTest, mm_set1_epi8(0x20))
+  let rangeLow = mm_set1_epi8(0x40)
+  let rangeHigh = mm_set1_epi8(0x5B)
+  let diff = mm_set1_epi8(0x20)
+
+  let upperTest =
+    mm_and_si128(mm_cmpgt_epi8(rangeHigh, ch), mm_cmpgt_epi8(ch, rangeLow))
+  let toLowerAdd = mm_and_si128(upperTest, diff)
   result = mm_add_epi8(ch, toLowerAdd)
 
-func findNextMatchPtr(
-    pattern: char, textPtr: ptr char, textLen: int, startPos: int
-): tuple[pos: int, isWordStart: bool] =
-  if startPos >= textLen:
-    return (pos: -1, isWordStart: false)
+func prepareSearchContext*(query: string): SearchContext =
+  let clean = query.strip()
+  if clean.len == 0:
+    return SearchContext(isValid: false)
 
-  let patternVec = mm_set1_epi8(pattern.int8)
-  var pos = startPos
-  let baseAddr = cast[int](textPtr)
+  result.isValid = true
+  result.tokens = clean.splitWhitespace()
+  result.firstCharVecs = newSeq[M128i](result.tokens.len)
 
-  while pos <= textLen - VectorSize:
+  for i, token in result.tokens:
+    if token.len > 0:
+      result.firstCharVecs[i] = mm_set1_epi8(token[0].toLowerAscii.ord.int8)
+
+func scoreToken(startPtr: ptr char, len: int, pattern: string, patternVec: M128i): int =
+  if pattern.len > len:
+    return 0
+
+  let patternLen = pattern.len
+  var pos = 0
+  let baseAddr = cast[int](startPtr)
+
+  while pos <= len - VectorSize:
     let chunkAddr = cast[ptr M128i](baseAddr + pos)
+
     let textVec = toLowerSimd(mm_loadu_si128(chunkAddr))
-    let patternLowerVec = toLowerSimd(patternVec)
 
-    let matches = mm_cmpeq_epi8(textVec, patternLowerVec)
-    let matchMask = mm_movemask_epi8(matches)
+    let matches = mm_cmpeq_epi8(textVec, patternVec)
+    let mask = mm_movemask_epi8(matches)
 
-    if matchMask != 0:
-      let offset = countTrailingZeroBits(uint16(matchMask))
-      let matchPos = pos + offset
+    if mask != 0:
+      var currentMask = uint16(mask)
+      while currentMask != 0:
+        let offset = countTrailingZeroBits(currentMask)
+        let matchPos = pos + offset
 
-      var isWordStart = false
-      if matchPos == 0:
-        isWordStart = true
-      elif matchPos > 0:
-        let prevChar = cast[ptr char](baseAddr + matchPos - 1)[]
-        isWordStart = prevChar == ' ' or prevChar == '-' or prevChar == '_'
+        if matchPos + patternLen <= len:
+          var fullMatch = true
+          for k in 1 ..< patternLen:
+            let cText = (cast[ptr char](baseAddr + matchPos + k)[]).toLowerAscii
+            let cPat = pattern[k].toLowerAscii
+            if cText != cPat:
+              fullMatch = false
+              break
 
-      return (pos: matchPos, isWordStart: isWordStart)
+          if fullMatch:
+            var localScore = 10
+
+            if matchPos == 0:
+              localScore += 20
+            elif matchPos > 0:
+              let prev = cast[ptr char](baseAddr + matchPos - 1)[]
+              if prev in {' ', '-', '_', '/'}:
+                localScore += 20
+
+            if (cast[ptr char](baseAddr + matchPos)[] == pattern[0]):
+              localScore += 5
+
+            return localScore
+
+        currentMask = currentMask and not (1.uint16 shl offset)
 
     pos += VectorSize
 
-  if pos < textLen:
-    var lastChunk: array[VectorSize, char]
-    let remaining = textLen - pos
-    copyMem(addr lastChunk[0], cast[pointer](baseAddr + pos), remaining)
-    if remaining < VectorSize:
-      zeroMem(addr lastChunk[remaining], VectorSize - remaining)
+  while pos <= len - patternLen:
+    let c = (cast[ptr char](baseAddr + pos)[]).toLowerAscii
+    if c == pattern[0].toLowerAscii:
+      var fullMatch = true
+      for k in 1 ..< patternLen:
+        if (cast[ptr char](baseAddr + pos + k)[]).toLowerAscii != pattern[k].toLowerAscii:
+          fullMatch = false
+          break
+      if fullMatch:
+        var localScore = 10
+        if pos == 0:
+          localScore += 20
+        elif pos > 0:
+          let prev = cast[ptr char](baseAddr + pos - 1)[]
+          if prev in {' ', '-', '_'}:
+            localScore += 20
+        return localScore
 
-    let textVec = toLowerSimd(mm_loadu_si128(cast[ptr M128i](addr lastChunk[0])))
-    let patternLowerVec = toLowerSimd(patternVec)
-    let validMask = (1 shl remaining) - 1
-    let matches = mm_cmpeq_epi8(textVec, patternLowerVec)
-    let matchMask = mm_movemask_epi8(matches) and validMask
+    pos += 1
 
-    if matchMask != 0:
-      let offset = countTrailingZeroBits(uint16(matchMask))
-      let matchPos = pos + offset
-      if matchPos < textLen:
-        var isWordStart = false
-        if matchPos == 0:
-          isWordStart = true
-        elif matchPos > 0:
-          let prevChar = cast[ptr char](baseAddr + matchPos - 1)[]
-          isWordStart = prevChar == ' ' or prevChar == '-' or prevChar == '_'
-        return (pos: matchPos, isWordStart: isWordStart)
-
-  return (pos: -1, isWordStart: false)
+  return 0
 
 func scorePackageSimd*(
-    pool: string, nameOffset: int32, nameLen: int16, query: string
+    pageStr: string, offset: uint16, nameLen: uint8, ctx: SearchContext
 ): int =
-  if query.len == 0 or nameLen == 0:
+  if not ctx.isValid or nameLen == 0:
     return 0
 
-  let textPtr = cast[ptr char](unsafeAddr pool[int(nameOffset)])
+  let textPtr = cast[ptr char](unsafeAddr pageStr[offset])
   let textLen = int(nameLen)
+  var totalScore = 0
 
-  if query.len > textLen:
-    return 0
-
-  var
-    score = 0.0'f32
-    lastMatchPos = -1
-    searchPos = 0
-    consecutiveMatches = 0
-
-  for qChar in query:
-    let matchResult = findNextMatchPtr(qChar, textPtr, textLen, searchPos)
-
-    if matchResult.pos == -1:
+  for i, token in ctx.tokens:
+    let s = scoreToken(textPtr, textLen, token, ctx.firstCharVecs[i])
+    if s == 0:
       return 0
+    totalScore += s
 
-    score += 10.0
-    if matchResult.isWordStart:
-      score += 20.0
+  let density = float(ctx.tokens.join(" ").len) / float(textLen)
+  totalScore = int(float(totalScore) * (1.0 + density))
 
-    if lastMatchPos != -1 and matchResult.pos == lastMatchPos + 1:
-      consecutiveMatches += 1
-      score += float32(consecutiveMatches) * 5.0
-    else:
-      consecutiveMatches = 0
-
-    let charInText = cast[ptr char](cast[int](textPtr) + matchResult.pos)[]
-    if charInText == qChar:
-      score += 5.0
-
-    lastMatchPos = matchResult.pos
-    searchPos = matchResult.pos + 1
-
-  let density = float32(query.len) / float32(textLen)
-  score *= density
-
-  if lastMatchPos < textLen div 2:
-    score *= 1.2
-
-  if query.len == textLen:
-    score *= 5.0
-
-  return int(score)
+  return totalScore

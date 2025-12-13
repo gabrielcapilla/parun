@@ -10,8 +10,10 @@ func stripAnsi*(s: string): string =
     let c = s[i]
     if c == '\e' and i + 1 < L and s[i + 1] == '[':
       inc(i, 2)
+
       while i < L and s[i] in {'0' .. '9', ';', '?', '!', '[', ']'}:
         inc(i)
+
       if i < L and s[i] in {'@' .. '~'}:
         inc(i)
     else:
@@ -19,6 +21,15 @@ func stripAnsi*(s: string): string =
       inc(i)
 
 func visibleWidth*(s: string): int =
+  var isAscii = true
+  for c in s:
+    if ord(c) >= 128 or c == '\e':
+      isAscii = false
+      break
+
+  if isAscii:
+    return s.len
+
   var i = 0
   let L = s.len
   var n = 0

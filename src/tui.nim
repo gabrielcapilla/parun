@@ -2,6 +2,9 @@ import std/[strformat, strutils, sets, tables]
 import types, utils, core
 
 const
+  MinTermWidth = 50
+  MinTermHeight = 10
+
   BoxTopLeft = "╭"
   BoxTopRight = "╮"
   BoxBottomLeft = "╰"
@@ -9,7 +12,6 @@ const
   BoxHor = "─"
   BoxVer = "│"
   ColorFrame = "\e[90m"
-
   Reset = "\e[0m"
   CursorPrefixSel = "\e[93m* "
   CursorPrefixUnsel = "\e[93m*\e[0m "
@@ -18,11 +20,13 @@ const
   Space = " "
   InstalledTag = " \e[36m[installed]\e[0m"
 
+  PrefixLen = 2
+  InstalledLen = 12
   Spaces50 = "                                                  "
 
-type RenderResult* = tuple[frame: string, cursorX: int, cursorY: int]
+type RenderResult* = tuple[cursorX: int, cursorY: int]
 
-func appendRow(
+proc appendRow(
     buffer: var string,
     state: AppState,
     idx: int32,
@@ -30,6 +34,39 @@ func appendRow(
     isCursor, isSelected: bool,
 ) =
   let p = state.pkgs[int(idx)]
+
+  let rawRepo = state.getRepo(p)
+  let rawName = state.getName(p)
+  let rawVer = state.getVersion(p)
+  let isInstalled = p.isInstalled
+
+  let tagW = if isInstalled: InstalledLen else: 0
+  let maxTextW = max(0, width - PrefixLen - tagW)
+
+  var dRepo = rawRepo
+  var dName = rawName
+  var dVer = rawVer
+
+  let currentLen = dRepo.len + 1 + dName.len + 1 + dVer.len
+
+  if currentLen > maxTextW:
+    let repoNameLen = dRepo.len + 1 + dName.len
+
+    if repoNameLen + 1 < maxTextW:
+      let roomForVer = maxTextW - repoNameLen - 1
+      if roomForVer > 0:
+        dVer = dVer[0 ..< min(dVer.len, roomForVer)]
+      else:
+        dVer = ""
+    else:
+      dVer = ""
+      let roomForName = maxTextW - dRepo.len - 1
+      if roomForName > 0:
+        dName = dName[0 ..< min(dName.len, roomForName)]
+      else:
+        dName = ""
+
+        dRepo = dRepo[0 ..< min(dRepo.len, maxTextW)]
 
   if isCursor:
     buffer.add(ColorHighlightBg)
@@ -43,36 +80,48 @@ func appendRow(
     buffer.add(NormalPrefix)
 
   if isCursor or isSelected:
-    buffer.add(state.getRepo(p))
-    buffer.add(SepSlash)
-    buffer.add(state.getName(p))
-    buffer.add(Space)
-    buffer.add(state.getVersion(p))
+    buffer.add(dRepo)
+    if dName.len > 0:
+      buffer.add(SepSlash)
+      buffer.add(dName)
+    if dVer.len > 0:
+      buffer.add(Space)
+      buffer.add(dVer)
   else:
     buffer.add(ColorRepo)
-    buffer.add(state.getRepo(p))
+    buffer.add(dRepo)
     buffer.add(Reset)
-    buffer.add(SepSlash)
-    buffer.add(ColorPkg)
-    buffer.add(AnsiBold)
-    buffer.add(state.getName(p))
-    buffer.add(Reset)
-    buffer.add(Space)
-    buffer.add(ColorVer)
-    buffer.add(state.getVersion(p))
-    buffer.add(Reset)
+    if dName.len > 0:
+      buffer.add(SepSlash)
+      buffer.add(ColorPkg)
+      buffer.add(AnsiBold)
+      buffer.add(dName)
+      buffer.add(Reset)
+    if dVer.len > 0:
+      buffer.add(Space)
+      buffer.add(ColorVer)
+      buffer.add(dVer)
+      buffer.add(Reset)
 
-  if p.isInstalled:
+  if isInstalled:
     buffer.add(InstalledTag)
 
+  let usedLen =
+    PrefixLen + dRepo.len + (if dName.len > 0: 1 + dName.len else: 0) +
+    (if dVer.len > 0: 1 + dVer.len else: 0) + tagW
+
+  let pad = max(0, width - usedLen)
+
   if isCursor:
-    let contentStr =
-      (if isSelected: "* " else: "  ") & state.getRepo(p) & "/" & state.getName(p) & " " &
-      state.getVersion(p) & (if p.isInstalled: " [installed]" else: "")
-
-    let vLen = contentStr.len
-    let pad = max(0, width - vLen)
-
+    if pad > 0:
+      var p = pad
+      while p >= 50:
+        buffer.add(Spaces50)
+        p -= 50
+      if p > 0:
+        buffer.add(Spaces50[0 ..< p])
+    buffer.add(Reset)
+  else:
     if pad > 0:
       var p = pad
       while p >= 50:
@@ -81,17 +130,18 @@ func appendRow(
       if p > 0:
         buffer.add(Spaces50[0 ..< p])
 
-    buffer.add(Reset)
-  else:
-    let contentStr =
-      (if isSelected: "* " else: "  ") & state.getRepo(p) & "/" & state.getName(p) & " " &
-      state.getVersion(p) & (if p.isInstalled: " [installed]" else: "")
+proc renderUi*(state: AppState, buffer: var string, termH, termW: int): RenderResult =
+  buffer.setLen(0)
 
-    let vLen = contentStr.len
-    if vLen < width:
-      buffer.add(repeat(" ", width - vLen))
+  if termW < MinTermWidth or termH < MinTermHeight:
+    buffer.add("\e[2J\e[H")
+    buffer.add("\n")
+    buffer.add(fmt"{AnsiBold}\e[31mTerminal size too small:{AnsiReset}\n")
+    buffer.add(fmt"Width = {termW} Height = {termH}\n\n")
+    buffer.add(fmt"{AnsiBold}Needed for current config:{AnsiReset}\n")
+    buffer.add(fmt"Width = {MinTermWidth} Height = {MinTermHeight}\n")
+    return (cursorX: 0, cursorY: 0)
 
-func renderUi*(state: AppState, termH, termW: int): RenderResult =
   let listH = max(1, termH - 2)
   let showDetails = state.showDetails and (termW >= 90)
 
@@ -107,17 +157,14 @@ func renderUi*(state: AppState, termH, termW: int): RenderResult =
       0
   let detailTextW = max(0, detailTotalW - 2)
 
-  var buffer = newStringOfCap(termH * termW + 4096)
-
   for r in 0 ..< listH:
-    let idx = state.scroll + (listH - 1 - r)
+    let rowIdx = state.scroll + (listH - 1 - r)
 
-    if idx >= 0 and idx < state.visibleIndices.len:
-      let realIdx = state.visibleIndices[idx]
+    if rowIdx >= 0 and rowIdx < state.visibleIndices.len:
+      let realIdx = state.visibleIndices[rowIdx]
       let pId = state.getPkgId(realIdx)
       let isSel = pId in state.selected
-
-      appendRow(buffer, state, realIdx, listW, idx == state.cursor, isSel)
+      appendRow(buffer, state, realIdx, listW, rowIdx == state.cursor, isSel)
     else:
       buffer.add(repeat(" ", listW))
 
@@ -147,9 +194,9 @@ func renderUi*(state: AppState, termH, termW: int): RenderResult =
           if state.detailsCache.hasKey(pId):
             let dLines = state.detailsCache[pId].splitLines
             let scrollOffset = state.detailScroll
-            let effectiveDetailIdx = contentRowIndex + scrollOffset
-            if effectiveDetailIdx < dLines.len:
-              textContent = dLines[effectiveDetailIdx].replace("\t", "  ")
+            let effectiveIdx = contentRowIndex + scrollOffset
+            if effectiveIdx < dLines.len:
+              textContent = dLines[effectiveIdx].replace("\t", "  ")
           else:
             if contentRowIndex == 0:
               textContent = "Loading..."
@@ -177,7 +224,6 @@ func renderUi*(state: AppState, termH, termW: int): RenderResult =
       fmt"{AnsiDim}(...){AnsiReset}"
     else:
       fmt"{AnsiDim}({state.visibleIndices.len}/{state.pkgs.len}){AnsiReset}"
-
   var statusPrefix = ""
   if state.selected.len > 0:
     statusPrefix.add(fmt"{ColorSel}[{state.selected.len}]{AnsiReset} ")
@@ -198,10 +244,6 @@ func renderUi*(state: AppState, termH, termW: int): RenderResult =
   else:
     modeStr = fmt"{ColorModeHybrid}[Local+AUR]{AnsiReset}"
 
-  if (state.inputMode == ModeVimNormal or state.inputMode == ModeVimInsert) and
-      state.searchMode == ModeHybrid and state.dataSource == SourceSystem:
-    modeStr.add(fmt" {ColorModeHybrid}[AUR]{AnsiReset}")
-
   var leftSide = ""
   var cursorVisualX = 0
 
@@ -220,14 +262,12 @@ func renderUi*(state: AppState, termH, termW: int): RenderResult =
     else:
       (if state.inputMode == ModeVimNormal: ": " else: "> ") & state.searchBuffer
   let leftLen = visibleWidth(leftSideClean)
-
   let rightSide = fmt"{statusPrefix}{modeStr} {pkgCountStr}"
   let rightLen = visibleWidth(rightSide)
-
   let spacing = max(0, termW - leftLen - rightLen)
 
   buffer.add(leftSide)
   buffer.add(repeat(" ", spacing))
   buffer.add(rightSide)
 
-  return (frame: buffer, cursorX: cursorVisualX, cursorY: termH)
+  return (cursorX: cursorVisualX, cursorY: termH)

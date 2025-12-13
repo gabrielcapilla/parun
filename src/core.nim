@@ -4,17 +4,19 @@ import types, simd, pkgManager
 const MaxDetailsCache = 50
 
 template getName*(state: AppState, p: CompactPackage): string =
-  state.stringPool[int(p.offset) ..< int(p.offset) + int(p.nameLen)]
+  let page = state.memoryPages[p.pageIdx]
+  page[p.pageOffset ..< p.pageOffset + p.nameLen]
 
 template getVersion*(state: AppState, p: CompactPackage): string =
-  let start = int(p.offset) + int(p.nameLen) + 1
+  let page = state.memoryPages[p.pageIdx]
+  let start = p.pageOffset + p.nameLen + 1
   var curr = start
-  while curr < state.stringPool.len and state.stringPool[curr] != '\0':
+  while curr < page.len.uint16 and page[curr] != '\0':
     inc(curr)
-  state.stringPool[start ..< curr]
+  page[start ..< curr]
 
 template getRepo*(state: AppState, p: CompactPackage): string =
-  state.repoList[int(p.repoIdx)]
+  state.repoList[p.repoIdx]
 
 func getPkgId*(state: AppState, idx: int32): string =
   let p = state.pkgs[int(idx)]
@@ -35,26 +37,18 @@ func filterIndices(state: AppState, query: string): seq[int32] =
       result[i] = int32(i)
     return
 
-  let tokens = cleanQuery.splitWhitespace()
-  if tokens.len == 0:
+  let ctx = prepareSearchContext(cleanQuery)
+  if not ctx.isValid:
     return @[]
 
   var scored = newSeqOfCap[tuple[idx: int32, score: int]](min(2000, state.pkgs.len))
 
   for i in 0 ..< state.pkgs.len:
     let p = state.pkgs[i]
-    var totalScore = 0
-    var allTokensMatch = true
 
-    for token in tokens:
-      let s = scorePackageSimd(state.stringPool, p.offset, int16(p.nameLen), token)
-      if s == 0:
-        allTokensMatch = false
-        break
-      totalScore += s
-
-    if allTokensMatch:
-      scored.add((int32(i), totalScore))
+    let s = scorePackageSimd(state.memoryPages[p.pageIdx], p.pageOffset, p.nameLen, ctx)
+    if s > 0:
+      scored.add((int32(i), s))
 
   scored.sort do(a, b: auto) -> int:
     cmp(b.score, a.score)
@@ -77,12 +71,12 @@ func newState*(
     initialMode: SearchMode, initialShowDetails: bool, useVim: bool, startNimble: bool
 ): AppState =
   AppState(
-    pkgs: newSeqOfCap[CompactPackage](0),
-    visibleIndices: @[],
-    stringPool: newStringOfCap(1024),
+    pkgs: newSeqOfCap[CompactPackage](20000),
+    memoryPages: newSeq[string](),
     repoList: @[],
+    visibleIndices: @[],
     localPkgCount: 0,
-    localPoolLen: 0,
+    localPageCount: 0,
     localRepoCount: 0,
     selected: initHashSet[string](),
     detailsCache: initTable[string, string](),
@@ -213,7 +207,7 @@ proc update*(state: AppState, msg: Msg, listHeight: int): AppState =
             result.searchMode = ModeLocal
             if result.localPkgCount > 0:
               result.pkgs.setLen(result.localPkgCount)
-              result.stringPool.setLen(result.localPoolLen)
+              result.memoryPages.setLen(result.localPageCount)
               result.repoList.setLen(result.localRepoCount)
               result.visibleIndices = filterIndices(result, result.searchBuffer)
               result.cursor = 0
@@ -222,7 +216,7 @@ proc update*(state: AppState, msg: Msg, listHeight: int): AppState =
       if k == KeyCtrlN:
         result.searchId.inc()
         result.pkgs = newSeqOfCap[CompactPackage](0)
-        result.stringPool = newStringOfCap(4096)
+        result.memoryPages = newSeq[string]()
         result.repoList = newSeq[string]()
 
         result.visibleIndices = @[]
@@ -342,18 +336,19 @@ proc update*(state: AppState, msg: Msg, listHeight: int): AppState =
         else:
           remoteRepoMap[i] = uint16(found)
 
-      let baseOffset = int32(result.stringPool.len)
-      result.stringPool.add(msg.poolData)
+      let basePageIdx = uint16(result.memoryPages.len)
+      for page in msg.pages:
+        result.memoryPages.add(page)
 
       for p in msg.packedPkgs:
         var newP = p
         newP.repoIdx = remoteRepoMap[p.repoIdx]
-        newP.offset += baseOffset
+        newP.pageIdx += basePageIdx
         result.pkgs.add(newP)
 
       if result.searchBuffer.len == 0 or result.dataSource == SourceNimble:
         result.localPkgCount = result.pkgs.len
-        result.localPoolLen = result.stringPool.len
+        result.localPageCount = result.memoryPages.len
         result.localRepoCount = result.repoList.len
 
       if not result.viewingSelection:
@@ -370,10 +365,10 @@ proc update*(state: AppState, msg: Msg, listHeight: int): AppState =
         result.scroll = 0
     else:
       result.pkgs = msg.packedPkgs
-      result.stringPool = msg.poolData
+      result.memoryPages = msg.pages
       result.repoList = msg.repos
       result.localPkgCount = result.pkgs.len
-      result.localPoolLen = result.stringPool.len
+      result.localPageCount = result.memoryPages.len
       result.localRepoCount = result.repoList.len
 
       if not result.viewingSelection:

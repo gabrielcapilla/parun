@@ -23,15 +23,12 @@ const
   KeyDown* = char(201)
   KeyLeft* = char(202)
   KeyRight* = char(203)
-
   KeyPageUp* = char(204)
   KeyPageDown* = char(205)
   KeyHome* = char(206)
   KeyEnd* = char(207)
-
   KeyDetailUp* = char(208)
   KeyDetailDown* = char(209)
-
   KeyF1* = char(210)
 
   AnsiReset* = "\e[0m"
@@ -53,13 +50,15 @@ const
   ColorVimInsert* = "\e[1;42;97m"
   ColorVimCommand* = "\e[1;41;97m"
 
+  PageSize* = 64 * 1024
+
 type
   CompactPackage* = object
-    offset*: int32
+    pageIdx*: uint16
+    pageOffset*: uint16
     repoIdx*: uint16
     nameLen*: uint8
     flags*: uint8
-    padding*: uint8
 
   SearchMode* = enum
     ModeLocal
@@ -90,10 +89,11 @@ type
       discard
     of MsgSearchResults:
       packedPkgs*: seq[CompactPackage]
-      poolData*: string
+      pages*: seq[string]
       repos*: seq[string]
       searchId*: int
       isAppend*: bool
+      durationMs*: int
     of MsgDetailsLoaded:
       pkgId*: string
       content*: string
@@ -102,22 +102,24 @@ type
 
   AppState* = object
     pkgs*: seq[CompactPackage]
-    stringPool*: string
+
+    memoryPages*: seq[string]
+
     repoList*: seq[string]
 
     localPkgCount*: int
-    localPoolLen*: int
+    localPageCount*: int
     localRepoCount*: int
 
     visibleIndices*: seq[int32]
     selected*: HashSet[string]
 
     detailsCache*: Table[string, string]
+
     cursor*: int
     scroll*: int
     searchBuffer*: string
     searchCursor*: int
-
     commandBuffer*: string
 
     searchMode*: SearchMode

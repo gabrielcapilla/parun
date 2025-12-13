@@ -1,6 +1,9 @@
 import
-  std/[os, osproc, strutils, strformat, tables, streams, sets, parseutils, parsejson]
-import types, utils
+  std/[
+    os, osproc, strutils, strformat, tables, streams, sets, parseutils, parsejson,
+    times, monotimes,
+  ]
+import types
 
 type
   WorkerReqKind = enum
@@ -21,18 +24,91 @@ type
 
   WorkerRes = Msg
 
+  PageBuilder* = object
+    pages*: seq[string]
+    currentPage*: string
+    pkgs*: seq[CompactPackage]
+    repoMap*: Table[string, uint16]
+    repos*: seq[string]
+
+func initPageBuilder*(): PageBuilder =
+  result.pages = @[]
+  result.currentPage = newStringOfCap(PageSize)
+  result.pkgs = newSeqOfCap[CompactPackage](1000)
+  result.repoMap = initTable[string, uint16]()
+  result.repos = @[]
+
+func addPackageData(
+    pb: var PageBuilder, name, ver: string, repoIdx: uint16, flags: uint8
+) =
+  let needed = name.len + 1 + ver.len + 1
+
+  if pb.currentPage.len + needed > PageSize:
+    pb.pages.add(pb.currentPage)
+    pb.currentPage = newStringOfCap(PageSize)
+
+  let offset = uint16(pb.currentPage.len)
+  let pageIdx = uint16(pb.pages.len)
+
+  pb.currentPage.add(name)
+  pb.currentPage.add('\0')
+  pb.currentPage.add(ver)
+  pb.currentPage.add('\0')
+
+  pb.pkgs.add(
+    CompactPackage(
+      pageIdx: pageIdx,
+      pageOffset: offset,
+      repoIdx: repoIdx,
+      nameLen: uint8(name.len),
+      flags: flags,
+    )
+  )
+
+proc flushBatch(
+    pb: var PageBuilder,
+    resChan: var Channel[WorkerRes],
+    searchId: int,
+    isNimble: bool,
+    startTime: MonoTime,
+) =
+  if pb.currentPage.len > 0:
+    pb.pages.add(pb.currentPage)
+    pb.currentPage = newStringOfCap(PageSize)
+
+  if pb.pkgs.len > 0:
+    let dur = (getMonoTime() - startTime).inMilliseconds.int
+
+    resChan.send(
+      Msg(
+        kind: MsgSearchResults,
+        packedPkgs: pb.pkgs,
+        pages: pb.pages,
+        repos:
+          if isNimble:
+            @["nimble"]
+          else:
+            pb.repos,
+        searchId: searchId,
+        isAppend: true,
+        durationMs: dur,
+      )
+    )
+
+    pb.pkgs = newSeqOfCap[CompactPackage](1000)
+    pb.pages = @[]
+    if not isNimble:
+      pb.repos = @[]
+      pb.repoMap = initTable[string, uint16]()
+
 var
   reqChan: Channel[WorkerReq]
   resChan: Channel[WorkerRes]
   workerThread: Thread[string]
 
-proc parseSingleLine(
-    line: string,
-    pool: var string,
-    repoMap: var Table[string, uint16],
-    repos: var seq[string],
-    installedMap: Table[string, string],
-): CompactPackage =
+proc parsePacmanOutput*(
+    line: string, pb: var PageBuilder, installedMap: Table[string, string]
+) =
   var i = 0
   let L = line.len
 
@@ -43,140 +119,35 @@ proc parseSingleLine(
   let repoName = line[rStart ..< i]
 
   i += line.skipWhitespace(i)
-  if i >= L:
-    return
 
   let nStart = i
   i += line.skipUntil({' '}, i)
   let nameLen = i - nStart
   if nameLen <= 0 or nameLen > 255:
     return
-
   let nameStr = line[nStart ..< i]
-
-  let offset = int32(pool.len)
-  pool.add(nameStr)
-  pool.add('\0')
 
   i += line.skipWhitespace(i)
 
   let vStart = i
   i += line.skipUntil({' '}, i)
-  if i > vStart:
-    pool.add(line[vStart ..< i])
-  else:
-    pool.add("?")
-  pool.add('\0')
+  let verStr =
+    if i > vStart:
+      line[vStart ..< i]
+    else:
+      "?"
 
   var flags: uint8 = 0
   if installedMap.hasKey(nameStr):
     flags = 1
-  elif i < L and (line.find("[installed]", i) > 0 or line.find("[instalado]", i) > 0):
+  elif line.find("[installed]", i) > 0 or line.find("[instalado]", i) > 0:
     flags = 1
 
-  if not repoMap.hasKey(repoName):
-    repoMap[repoName] = uint16(repos.len)
-    repos.add(repoName)
+  if not pb.repoMap.hasKey(repoName):
+    pb.repoMap[repoName] = uint16(pb.repos.len)
+    pb.repos.add(repoName)
 
-  result = CompactPackage(
-    offset: offset, repoIdx: repoMap[repoName], nameLen: uint8(nameLen), flags: flags
-  )
-
-proc parseSearchResults(lines: string): (seq[CompactPackage], string, seq[string]) =
-  var pkgs = newSeqOfCap[CompactPackage](100)
-  var pool = newStringOfCap(4096)
-  var repos: seq[string] = @[]
-  var repoMap = initTable[string, uint16]()
-
-  for rawLine in lines.splitLines:
-    if rawLine.len == 0:
-      continue
-    if rawLine.startsWith("    "):
-      continue
-
-    let line = stripAnsi(rawLine)
-
-    var i = 0
-    let slashPos = line.find('/')
-    if slashPos == -1:
-      continue
-
-    let repoName = line[0 ..< slashPos]
-    i = slashPos + 1
-
-    let spacePos = line.find(' ', i)
-    if spacePos == -1:
-      continue
-
-    let name = line[i ..< spacePos]
-    if name.len > 255:
-      continue
-    i = spacePos + 1
-
-    while i < line.len and line[i] == ' ':
-      inc(i)
-    if i >= line.len:
-      continue
-
-    let vEnd = line.find(' ', i)
-    let ver =
-      if vEnd == -1:
-        line[i .. ^1]
-      else:
-        line[i ..< vEnd]
-
-    let isInst = line.contains("[installed]") or line.contains("[instalado]")
-    let flags: uint8 = if isInst: 1 else: 0
-
-    let offset = int32(pool.len)
-    pool.add(name)
-    pool.add('\0')
-    pool.add(ver)
-    pool.add('\0')
-
-    if not repoMap.hasKey(repoName):
-      repoMap[repoName] = uint16(repos.len)
-      repos.add(repoName)
-
-    pkgs.add(
-      CompactPackage(
-        offset: offset,
-        repoIdx: repoMap[repoName],
-        nameLen: uint8(name.len),
-        flags: flags,
-      )
-    )
-  return (pkgs, pool, repos)
-
-proc sendBatch(
-    resChan: var Channel[WorkerRes],
-    pkgs: var seq[CompactPackage],
-    pool: var string,
-    repos: var seq[string],
-    repoMap: var Table[string, uint16],
-    searchId: int,
-    isNimble: bool = false,
-) =
-  if pkgs.len > 0:
-    resChan.send(
-      Msg(
-        kind: MsgSearchResults,
-        packedPkgs: pkgs,
-        poolData: pool,
-        repos:
-          if isNimble:
-            @["nimble"]
-          else:
-            repos,
-        searchId: searchId,
-        isAppend: true,
-      )
-    )
-    pkgs = newSeqOfCap[CompactPackage](2000)
-    pool = newStringOfCap(64 * 1024)
-    if not isNimble:
-      repos = @[]
-      repoMap = initTable[string, uint16]()
+  pb.addPackageData(nameStr, verStr, pb.repoMap[repoName], flags)
 
 proc skipJsonBlock(p: var JsonParser) =
   var depth = 1
@@ -209,6 +180,7 @@ proc workerLoop(tool: string) {.thread.} =
       of ReqStop:
         break
       of ReqLoadAll:
+        let tStart = getMonoTime()
         let (instOut, _) = execCmdEx("pacman -Q")
         var instMap = initTable[string, string]()
         for l in instOut.splitLines:
@@ -224,17 +196,20 @@ proc workerLoop(tool: string) {.thread.} =
         var outp = p.outputStream
         var line = ""
 
-        var batchPkgs = newSeqOfCap[CompactPackage](2000)
-        var batchPool = newStringOfCap(64 * 1024)
-        var batchRepos: seq[string] = @[]
-        var batchRepoMap = initTable[string, uint16]()
-
-        var interrupted = false
+        var pb = initPageBuilder()
         var counter = 0
+        var interrupted = false
 
         while outp.readLine(line):
+          if line.len == 0:
+            continue
+          parsePacmanOutput(line, pb, instMap)
+
           counter.inc()
-          if counter mod 500 == 0:
+          if counter >= 1000:
+            pb.flushBatch(resChan, req.searchId, false, tStart)
+            counter = 0
+
             let (hasNew, newReq) = reqChan.tryRecv()
             if hasNew:
               if newReq.kind == ReqDetails:
@@ -245,29 +220,11 @@ proc workerLoop(tool: string) {.thread.} =
                 interrupted = true
                 break
 
-          if line.len == 0:
-            continue
-
-          let pkg = parseSingleLine(line, batchPool, batchRepoMap, batchRepos, instMap)
-          if pkg.nameLen > 0:
-            batchPkgs.add(pkg)
-
-          if batchPkgs.len >= 2000:
-            sendBatch(
-              resChan, batchPkgs, batchPool, batchRepos, batchRepoMap, req.searchId,
-              false,
-            )
-
         p.close()
-
-        if interrupted:
-          continue
-
-        if batchPkgs.len > 0:
-          sendBatch(
-            resChan, batchPkgs, batchPool, batchRepos, batchRepoMap, req.searchId, false
-          )
+        if not interrupted:
+          pb.flushBatch(resChan, req.searchId, false, tStart)
       of ReqLoadNimble:
+        let tStart = getMonoTime()
         var installedSet = initHashSet[string]()
         let (listOut, _) = execCmdEx("nimble list -i --noColor")
         for line in listOut.splitLines:
@@ -294,19 +251,16 @@ proc workerLoop(tool: string) {.thread.} =
         defer:
           close(p)
 
-        var batchPkgs = newSeqOfCap[CompactPackage](200)
-        var batchPool = newStringOfCap(8192)
+        var pb = initPageBuilder()
         var interrupted = false
         var counter = 0
-
-        var dummyRepos: seq[string] = @[]
-        var dummyMap: Table[string, uint16]
-
         p.next()
 
         while p.kind != jsonEof and p.kind != jsonError:
           counter.inc()
-          if counter mod 100 == 0:
+          if counter >= 500:
+            pb.flushBatch(resChan, req.searchId, true, tStart)
+            counter = 0
             let (hasNew, newReq) = reqChan.tryRecv()
             if hasNew:
               if newReq.kind == ReqDetails:
@@ -338,87 +292,75 @@ proc workerLoop(tool: string) {.thread.} =
                 p.next()
 
             if currentName.len > 0 and currentName.len <= 255:
-              let offset = int32(batchPool.len)
-              batchPool.add(currentName)
-              batchPool.add('\0')
-              batchPool.add("latest")
-              batchPool.add('\0')
-
               let flags: uint8 = if currentName in installedSet: 1 else: 0
-              batchPkgs.add(
-                CompactPackage(
-                  offset: offset,
-                  repoIdx: 0,
-                  nameLen: uint8(currentName.len),
-                  flags: flags,
-                )
-              )
-
-              if batchPkgs.len >= 200:
-                sendBatch(
-                  resChan, batchPkgs, batchPool, dummyRepos, dummyMap, req.searchId,
-                  true,
-                )
+              pb.addPackageData(currentName, "latest", 0, flags)
 
             p.next()
           else:
             p.next()
 
         fs.close()
-
-        if interrupted:
-          continue
-
-        if batchPkgs.len > 0:
-          sendBatch(
-            resChan, batchPkgs, batchPool, dummyRepos, dummyMap, req.searchId, true
-          )
+        if not interrupted:
+          pb.flushBatch(resChan, req.searchId, true, tStart)
       of ReqSearch:
+        let tStart = getMonoTime()
         if tool != "pacman" and req.query.len > 2:
           let args = ["-Ss", "--aur", "--color", "never", req.query]
           let p = startProcess(tool, args = args, options = {poUsePath})
-          let outp = p.outputStream.readAll()
+          var pb = initPageBuilder()
+          let outLines = p.outputStream.readAll().splitLines()
           p.close()
 
-          let (sPkgs, sPool, sRepos) = parseSearchResults(outp)
+          for line in outLines:
+            if line.len == 0 or line.startsWith("    "):
+              continue
+            let parts = line.split(' ')
+            if parts.len > 0:
+              let fullId = parts[0]
+              if '/' in fullId:
+                let s = fullId.split('/')
+                let repo = s[0]
+                let name = s[1]
+                let ver =
+                  if parts.len > 1:
+                    parts[1]
+                  else:
+                    "?"
+                var flags: uint8 = 0
+                if line.contains("[installed]") or line.contains("[instalado]"):
+                  flags = 1
 
-          resChan.send(
-            Msg(
-              kind: MsgSearchResults,
-              packedPkgs: sPkgs,
-              poolData: sPool,
-              repos: sRepos,
-              searchId: req.searchId,
-              isAppend: true,
-            )
-          )
+                if not pb.repoMap.hasKey(repo):
+                  pb.repoMap[repo] = uint16(pb.repos.len)
+                  pb.repos.add(repo)
+
+                pb.addPackageData(name, ver, pb.repoMap[repo], flags)
+
+          pb.flushBatch(resChan, req.searchId, false, tStart)
       of ReqDetails:
         if req.source == SourceNimble:
           let p = startProcess(
             "nimble", args = ["search", req.pkgName], options = {poUsePath}
           )
-          let outp = p.outputStream.readAll()
+          let c = p.outputStream.readAll()
           p.close()
-          resChan.send(Msg(kind: MsgDetailsLoaded, pkgId: req.pkgId, content: outp))
+          resChan.send(Msg(kind: MsgDetailsLoaded, pkgId: req.pkgId, content: c))
         else:
           let target =
             if req.pkgRepo == "local":
               req.pkgName
             else:
               fmt"{req.pkgRepo}/{req.pkgName}"
-
+          let bin = if req.pkgRepo == "local": "pacman" else: tool
           let args =
             if req.pkgRepo == "local":
               @["-Qi", target]
             else:
               @["-Si", target]
-          let bin = if req.pkgRepo == "local": "pacman" else: tool
-
           let p = startProcess(bin, args = args, options = {poUsePath})
-          let outp = p.outputStream.readAll()
+          let c = p.outputStream.readAll()
           p.close()
-
-          resChan.send(Msg(kind: MsgDetailsLoaded, pkgId: req.pkgId, content: outp))
+          resChan.send(Msg(kind: MsgDetailsLoaded, pkgId: req.pkgId, content: c))
     except Exception as e:
       resChan.send(Msg(kind: MsgError, errMsg: e.msg))
 
@@ -465,32 +407,8 @@ proc pollWorkerMessages*(): seq[Msg] =
 proc installPackages*(names: seq[string], source: DataSource): int =
   if names.len == 0:
     return 0
-
   if source == SourceNimble:
-    var cleanNames: seq[string] = @[]
-    for n in names:
-      if n.contains('/'):
-        cleanNames.add(n.split('/')[1])
-      else:
-        cleanNames.add(n)
-
-    stdout.write("\n")
-    stdout.write(fmt"{AnsiBold}Nimble Packages ({cleanNames.len}){AnsiReset}")
-    stdout.write("\n\n")
-
-    for n in cleanNames:
-      stdout.write(fmt"  {ColorPkg}{n}{AnsiReset} (latest)\n")
-
-    stdout.write("\n")
-    stdout.write(fmt"{AnsiBold}:: Continue with the installation? [Y/n] {AnsiReset}")
-    stdout.flushFile()
-
-    let answer = stdin.readLine().toLowerAscii()
-    if answer == "" or answer == "s" or answer == "y":
-      return execCmd("nimble install " & cleanNames.join(" "))
-    else:
-      stdout.write("Operation cancelled.\n")
-      return 1
+    return execCmd("nimble install " & names.join(" "))
   else:
     let tool =
       if findExe("paru").len > 0:
@@ -499,44 +417,18 @@ proc installPackages*(names: seq[string], source: DataSource): int =
         "yay"
       else:
         "pacman"
-
-    var cmd = ""
-    if tool == "pacman":
-      cmd = "sudo pacman -S "
-    else:
-      cmd = tool & " -S "
-
+    let cmd =
+      if tool == "pacman":
+        "sudo pacman -S "
+      else:
+        tool & " -S "
     return execCmd(cmd & names.join(" "))
 
 proc uninstallPackages*(names: seq[string], source: DataSource): int =
   if names.len == 0:
     return 0
-
   if source == SourceNimble:
-    var cleanNames: seq[string] = @[]
-    for n in names:
-      if n.contains('/'):
-        cleanNames.add(n.split('/')[1])
-      else:
-        cleanNames.add(n)
-
-    stdout.write("\n")
-    stdout.write(fmt"{AnsiBold}Nimble Packages to DELETE ({cleanNames.len}){AnsiReset}")
-    stdout.write("\n\n")
-
-    for n in cleanNames:
-      stdout.write(fmt"  {ColorPkg}{n}{AnsiReset}\n")
-
-    stdout.write("\n")
-    stdout.write(fmt"{AnsiBold}:: Continue with uninstalling? [Y/n] {AnsiReset}")
-    stdout.flushFile()
-
-    let answer = stdin.readLine().toLowerAscii()
-    if answer == "" or answer == "s" or answer == "y":
-      return execCmd("nimble uninstall " & cleanNames.join(" "))
-    else:
-      stdout.write("Operation cancelled.\n")
-      return 1
+    return execCmd("nimble uninstall " & names.join(" "))
   else:
     let tool =
       if findExe("paru").len > 0:
@@ -545,9 +437,9 @@ proc uninstallPackages*(names: seq[string], source: DataSource): int =
         "yay"
       else:
         "pacman"
-    var cmd = ""
-    if tool == "pacman":
-      cmd = "sudo pacman -R "
-    else:
-      cmd = tool & " -R "
+    let cmd =
+      if tool == "pacman":
+        "sudo pacman -R "
+      else:
+        tool & " -R "
     return execCmd(cmd & names.join(" "))

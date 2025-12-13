@@ -1,6 +1,14 @@
 import std/[terminal, os, termios, selectors, posix, strutils, sets, tables, parseopt]
 import types, core, tui, pkgManager
 
+const SigWinchVal = 28.cint
+
+var resizePipe: array[2, cint]
+
+proc handleSigWinch(sig: cint) {.noconv.} =
+  var b: char = 'R'
+  discard posix.write(resizePipe[1], addr b, 1)
+
 proc initRawMode(): Termios =
   discard tcGetAttr(STDIN_FILENO, addr result)
   var raw = result
@@ -46,7 +54,6 @@ proc readInputSafe(): char =
     return KeyCtrlS
   if b1 == 14:
     return KeyCtrlN
-
   if b1 == 21:
     return KeyCtrlU
   if b1 == 4:
@@ -73,7 +80,6 @@ proc readInputSafe(): char =
       let b3 = readByte()
       if b3 == -1:
         return '\0'
-
       case b3
       of ord('A'):
         return KeyUp
@@ -97,19 +103,6 @@ proc readInputSafe(): char =
         if b4 == ord('~'):
           return KeyPageDown
         return '\0'
-      of ord('1'):
-        let b4 = readByte()
-        let b5 = readByte()
-        let b6 = readByte()
-        if b4 == ord(';') and b5 == ord('5'):
-          case b6
-          of ord('A'):
-            return KeyDetailUp
-          of ord('B'):
-            return KeyDetailDown
-          else:
-            return '\0'
-        return '\0'
       else:
         return '\0'
     elif b2 == ord('O'):
@@ -124,7 +117,6 @@ proc readInputSafe(): char =
       else:
         return '\0'
     return KeyEsc
-
   return char(b1)
 
 proc main() =
@@ -152,6 +144,16 @@ proc main() =
     else:
       discard
 
+  if posix.pipe(resizePipe) != 0:
+    quit("Error crítico: No se pudo crear pipe para señales.")
+
+  var pFlags = fcntl(resizePipe[0], F_GETFL, 0)
+  discard fcntl(resizePipe[0], F_SETFL, pFlags or O_NONBLOCK)
+  pFlags = fcntl(resizePipe[1], F_GETFL, 0)
+  discard fcntl(resizePipe[1], F_SETFL, pFlags or O_NONBLOCK)
+
+  posix.signal(SigWinchVal, handleSigWinch)
+
   let origTerm = initRawMode()
   stdout.write("\e[?1049h\e[?25l")
   stdout.flushFile()
@@ -167,13 +169,18 @@ proc main() =
 
   let selector = newSelector[int]()
   selector.registerHandle(STDIN_FILENO, {Event.Read}, 0)
+  selector.registerHandle(resizePipe[0], {Event.Read}, 1)
 
   defer:
     selector.close()
+    discard posix.close(resizePipe[0])
+    discard posix.close(resizePipe[1])
     stdout.write("\e[?1049l\e[?25h" & AnsiReset)
     discard tcSetAttr(STDIN_FILENO, TCSAFLUSH, addr origTerm)
     restoreBlockingMode()
     stdout.flushFile()
+
+  var renderBuffer = newStringOfCap(64 * 1024)
 
   while not state.shouldQuit:
     if state.shouldInstall or state.shouldUninstall:
@@ -212,18 +219,18 @@ proc main() =
         state.shouldUninstall = false
 
     if state.needsRedraw:
-      let (frame, cx, cy) = renderUi(state, terminalHeight(), terminalWidth())
+      let res = renderUi(state, renderBuffer, terminalHeight(), terminalWidth())
       stdout.write("\e[?25l")
       setCursorPos(0, 0)
-      stdout.write(frame)
+      stdout.write(renderBuffer)
 
       if state.inputMode == ModeVimCommand:
-        setCursorPos(cx, cy)
+        setCursorPos(res.cursorX, res.cursorY)
         stdout.write("\e[?25h")
       elif state.inputMode == ModeVimNormal:
         setCursorPos(terminalWidth(), terminalHeight())
       else:
-        setCursorPos(cx, cy)
+        setCursorPos(res.cursorX, res.cursorY)
         stdout.write("\e[?25h")
 
       stdout.flushFile()
@@ -234,32 +241,35 @@ proc main() =
         let id = state.getPkgId(idx)
         if not state.detailsCache.hasKey(id):
           let p = state.pkgs[int(idx)]
-
           requestDetails(id, state.getName(p), state.getRepo(p), state.dataSource)
 
     let ready = selector.select(20)
-    if ready.len > 0:
-      let k = readInputSafe()
-      if k != '\0':
-        let listH = max(1, terminalHeight() - 2)
-        state = update(state, Msg(kind: MsgInput, key: k), listH)
+    for key in ready:
+      if key.fd == resizePipe[0]:
+        var b: char
+        discard posix.read(resizePipe[0], addr b, 1)
+        state.needsRedraw = true
+      elif key.fd == STDIN_FILENO:
+        let k = readInputSafe()
+        if k != '\0':
+          let listH = max(1, terminalHeight() - 2)
+          state = update(state, Msg(kind: MsgInput, key: k), listH)
 
-        let inInsert =
-          state.inputMode == ModeStandard or state.inputMode == ModeVimInsert
-        let isEditing =
-          (k.ord >= 32 and k.ord <= 126) or k == KeyBack or k == KeyBackspace
-        let isToggle = (k == KeyCtrlA)
-        let shouldCheckNetwork = (isEditing and inInsert) or isToggle
+          let inInsert =
+            state.inputMode == ModeStandard or state.inputMode == ModeVimInsert
+          let isEditing =
+            (k.ord >= 32 and k.ord <= 126) or k == KeyBack or k == KeyBackspace
+          let isToggle = (k == KeyCtrlA)
+          let shouldCheckNetwork = (isEditing and inInsert) or isToggle
 
-        if shouldCheckNetwork and not state.viewingSelection:
-          if state.dataSource == SourceSystem:
-            let hasAurPrefix = state.searchBuffer.startsWith("aur/")
-            let effectiveQuery = getEffectiveQuery(state.searchBuffer)
-            let active = (state.searchMode == ModeHybrid) or hasAurPrefix
-
-            if active and effectiveQuery.len > 2:
-              state.searchId.inc()
-              requestSearch(effectiveQuery, state.searchId)
+          if shouldCheckNetwork and not state.viewingSelection:
+            if state.dataSource == SourceSystem:
+              let hasAurPrefix = state.searchBuffer.startsWith("aur/")
+              let effectiveQuery = getEffectiveQuery(state.searchBuffer)
+              let active = (state.searchMode == ModeHybrid) or hasAurPrefix
+              if active and effectiveQuery.len > 2:
+                state.searchId.inc()
+                requestSearch(effectiveQuery, state.searchId)
 
     for msg in pollWorkerMessages():
       let listH = max(1, terminalHeight() - 2)
