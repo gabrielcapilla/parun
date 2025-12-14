@@ -110,7 +110,7 @@ parun [options]
 
 ---
 
-## ⚙️ Configuration
+## Configuration
 
 Parun does not require an external configuration file. However, it internally interacts with `pacman`, `paru`, `yay`, and `nimble` commands. Ensure these are installed.
 
