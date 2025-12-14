@@ -16,15 +16,21 @@
 
 ---
 
-## Installation
-
-### Prerequisites
+## Prerequisites
 
 - An Arch-based Linux distribution (the `pacman` package manager must be available).
 - `nim >= 2.2.6`
 - `nimsimd >= 1.3.2`
 
-### Steps
+## Installation
+
+### Install using Nimble via GitHub
+
+```bash
+nimble install https://github.com/gabrielcapilla/parun.git
+```
+
+### Build
 
 1. Clone this repository:
 
