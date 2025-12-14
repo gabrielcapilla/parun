@@ -31,6 +31,7 @@ const
   KeyDetailDown* = char(209)
   KeyF1* = char(210)
 
+  # I should be using std/terminal, but it complicates my implementation
   AnsiReset* = "\e[0m"
   AnsiBold* = "\e[1m"
   AnsiDim* = "\e[2m"

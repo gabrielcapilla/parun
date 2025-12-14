@@ -135,11 +135,12 @@ proc renderUi*(state: AppState, buffer: var string, termH, termW: int): RenderRe
 
   if termW < MinTermWidth or termH < MinTermHeight:
     buffer.add("\e[2J\e[H")
-    buffer.add("\n")
-    buffer.add(fmt"{AnsiBold}\e[31mTerminal size too small:{AnsiReset}\n")
-    buffer.add(fmt"Width = {termW} Height = {termH}\n\n")
-    buffer.add(fmt"{AnsiBold}Needed for current config:{AnsiReset}\n")
-    buffer.add(fmt"Width = {MinTermWidth} Height = {MinTermHeight}\n")
+    # I need to fix this so it looks centered in the terminal
+    # buffer.add("\n")
+    buffer.add(fmt"{AnsiBold}Terminal size too small.{AnsiReset}")
+    # buffer.add(fmt"Width = {termW} Height = {termH}\n\n")
+    # buffer.add(fmt"{AnsiBold}Needed for current config:{AnsiReset}\n")
+    # buffer.add(fmt"Width = {MinTermWidth} Height = {MinTermHeight}\n")
     return (cursorX: 0, cursorY: 0)
 
   let listH = max(1, termH - 2)

@@ -145,7 +145,7 @@ proc main() =
       discard
 
   if posix.pipe(resizePipe) != 0:
-    quit("Error crítico: No se pudo crear pipe para señales.")
+    quit("Critical Error: Could not create pipe for signals.")
 
   var pFlags = fcntl(resizePipe[0], F_GETFL, 0)
   discard fcntl(resizePipe[0], F_SETFL, pFlags or O_NONBLOCK)
@@ -188,7 +188,13 @@ proc main() =
       if state.selected.len > 0:
         for s in state.selected:
           if state.shouldInstall:
-            targets.add(s)
+            if state.dataSource == SourceNimble:
+              if s.contains('/'):
+                targets.add(s.split('/')[1])
+              else:
+                targets.add(s)
+            else:
+              targets.add(s)
           else:
             if s.contains('/'):
               targets.add(s.split('/')[1])
@@ -198,7 +204,10 @@ proc main() =
         let idx = state.visibleIndices[state.cursor]
         let p = state.pkgs[int(idx)]
         if state.shouldInstall:
-          targets.add(state.getRepo(p) & "/" & state.getName(p))
+          if state.dataSource == SourceNimble:
+            targets.add(state.getName(p))
+          else:
+            targets.add(state.getRepo(p) & "/" & state.getName(p))
         else:
           targets.add(state.getName(p))
 
