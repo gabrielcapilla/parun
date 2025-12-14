@@ -118,3 +118,8 @@ Parun does not require an external configuration file. However, it internally in
 
 - `$PACMAN`: The primary package manager (usually `pacman`, `paru`, or `yay`). Parun detects it automatically.
 - `$HOME/.nimble/packages_official.json`: Required by `--nimble` mode. Can be created with `nimble refresh`.
+
+## Repository & Support
+
+- **GitHub:** [gabrielcapilla/parun](https://github.com/gabrielcapilla/parun)
+- **Nostr:** [@gabrielcapilla](https://nostree.me/npub1uf2dtc8wfpd7g4papst44uy0yzlnud54tzglhffrr3yvh6hnjefq4uy52e)
