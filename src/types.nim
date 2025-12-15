@@ -1,6 +1,9 @@
 import std/[sets, tables]
 
 const
+  DetailsCacheLimit* = 16
+  BlockSize* = 64 * 1024
+
   KeyCtrlA* = char(1)
   KeyCtrlB* = char(2)
   KeyCtrlC* = char(3)
@@ -31,7 +34,6 @@ const
   KeyDetailDown* = char(209)
   KeyF1* = char(210)
 
-  # I should be using std/terminal, but it complicates my implementation
   AnsiReset* = "\e[0m"
   AnsiBold* = "\e[1m"
   AnsiDim* = "\e[2m"
@@ -51,14 +53,13 @@ const
   ColorVimInsert* = "\e[1;42;97m"
   ColorVimCommand* = "\e[1;41;97m"
 
-  PageSize* = 64 * 1024
-
 type
-  CompactPackage* = object
-    pageIdx*: uint16
-    pageOffset*: uint16
-    repoIdx*: uint16
+  PackedPackage* = object
+    blockIdx*: uint16
+    offset*: uint16
+    repoIdx*: uint8
     nameLen*: uint8
+    verLen*: uint8
     flags*: uint8
 
   SearchMode* = enum
@@ -89,8 +90,8 @@ type
     of MsgTick:
       discard
     of MsgSearchResults:
-      packedPkgs*: seq[CompactPackage]
-      pages*: seq[string]
+      pkgs*: seq[PackedPackage]
+      textBlock*: string
       repos*: seq[string]
       searchId*: int
       isAppend*: bool
@@ -101,20 +102,22 @@ type
     of MsgError:
       errMsg*: string
 
+  PackageDB* = object
+    pkgs*: seq[PackedPackage]
+    textBlocks*: seq[string]
+    repos*: seq[string]
+    isLoaded*: bool
+
   AppState* = object
-    pkgs*: seq[CompactPackage]
+    pkgs*: seq[PackedPackage]
+    textBlocks*: seq[string]
+    repos*: seq[string]
 
-    memoryPages*: seq[string]
-
-    repoList*: seq[string]
-
-    localPkgCount*: int
-    localPageCount*: int
-    localRepoCount*: int
+    systemDB*: PackageDB
+    nimbleDB*: PackageDB
 
     visibleIndices*: seq[int32]
     selected*: HashSet[string]
-
     detailsCache*: Table[string, string]
 
     cursor*: int
@@ -139,5 +142,5 @@ type
 
     detailScroll*: int
 
-func isInstalled*(p: CompactPackage): bool {.inline.} =
+func isInstalled*(p: PackedPackage): bool {.inline.} =
   (p.flags and 1) != 0

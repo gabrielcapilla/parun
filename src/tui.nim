@@ -34,24 +34,17 @@ proc appendRow(
     isCursor, isSelected: bool,
 ) =
   let p = state.pkgs[int(idx)]
-
-  let rawRepo = state.getRepo(p)
-  let rawName = state.getName(p)
-  let rawVer = state.getVersion(p)
-  let isInstalled = p.isInstalled
-
-  let tagW = if isInstalled: InstalledLen else: 0
+  let tagW = if p.isInstalled: InstalledLen else: 0
   let maxTextW = max(0, width - PrefixLen - tagW)
 
-  var dRepo = rawRepo
-  var dName = rawName
-  var dVer = rawVer
+  var dRepo = state.getRepo(p)
+  var dName = state.getName(p)
+  var dVer = state.getVersion(p)
 
   let currentLen = dRepo.len + 1 + dName.len + 1 + dVer.len
 
   if currentLen > maxTextW:
     let repoNameLen = dRepo.len + 1 + dName.len
-
     if repoNameLen + 1 < maxTextW:
       let roomForVer = maxTextW - repoNameLen - 1
       if roomForVer > 0:
@@ -65,7 +58,6 @@ proc appendRow(
         dName = dName[0 ..< min(dName.len, roomForName)]
       else:
         dName = ""
-
         dRepo = dRepo[0 ..< min(dRepo.len, maxTextW)]
 
   if isCursor:
@@ -103,7 +95,7 @@ proc appendRow(
       buffer.add(dVer)
       buffer.add(Reset)
 
-  if isInstalled:
+  if p.isInstalled:
     buffer.add(InstalledTag)
 
   let usedLen =
@@ -135,12 +127,7 @@ proc renderUi*(state: AppState, buffer: var string, termH, termW: int): RenderRe
 
   if termW < MinTermWidth or termH < MinTermHeight:
     buffer.add("\e[2J\e[H")
-    # I need to fix this so it looks centered in the terminal
-    # buffer.add("\n")
     buffer.add(fmt"{AnsiBold}Terminal size too small.{AnsiReset}")
-    # buffer.add(fmt"Width = {termW} Height = {termH}\n\n")
-    # buffer.add(fmt"{AnsiBold}Needed for current config:{AnsiReset}\n")
-    # buffer.add(fmt"Width = {MinTermWidth} Height = {MinTermHeight}\n")
     return (cursorX: 0, cursorY: 0)
 
   let listH = max(1, termH - 2)

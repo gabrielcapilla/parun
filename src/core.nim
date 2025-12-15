@@ -1,22 +1,15 @@
 import std/[strutils, sets, tables, algorithm, math]
 import types, simd, pkgManager
 
-const MaxDetailsCache = 50
+template getName*(state: AppState, p: PackedPackage): string =
+  state.textBlocks[p.blockIdx][p.offset ..< p.offset + p.nameLen]
 
-template getName*(state: AppState, p: CompactPackage): string =
-  let page = state.memoryPages[p.pageIdx]
-  page[p.pageOffset ..< p.pageOffset + p.nameLen]
+template getVersion*(state: AppState, p: PackedPackage): string =
+  let start = p.offset + p.nameLen
+  state.textBlocks[p.blockIdx][start ..< start + p.verLen]
 
-template getVersion*(state: AppState, p: CompactPackage): string =
-  let page = state.memoryPages[p.pageIdx]
-  let start = p.pageOffset + p.nameLen + 1
-  var curr = start
-  while curr < page.len.uint16 and page[curr] != '\0':
-    inc(curr)
-  page[start ..< curr]
-
-template getRepo*(state: AppState, p: CompactPackage): string =
-  state.repoList[p.repoIdx]
+template getRepo*(state: AppState, p: PackedPackage): string =
+  state.repos[p.repoIdx]
 
 func getPkgId*(state: AppState, idx: int32): string =
   let p = state.pkgs[int(idx)]
@@ -45,8 +38,10 @@ func filterIndices(state: AppState, query: string): seq[int32] =
 
   for i in 0 ..< state.pkgs.len:
     let p = state.pkgs[i]
+    let blockPtr = unsafeAddr state.textBlocks[p.blockIdx][0]
+    let namePtr = cast[ptr char](cast[int](blockPtr) + int(p.offset))
 
-    let s = scorePackageSimd(state.memoryPages[p.pageIdx], p.pageOffset, p.nameLen, ctx)
+    let s = scorePackageSimd(namePtr, int(p.nameLen), ctx)
     if s > 0:
       scored.add((int32(i), s))
 
@@ -61,7 +56,6 @@ func filterBySelection(state: AppState): seq[int32] =
   result = newSeqOfCap[int32](state.selected.len)
   if state.selected.len == 0:
     return
-
   for i in 0 ..< state.pkgs.len:
     let id = state.getPkgId(int32(i))
     if id in state.selected:
@@ -71,13 +65,12 @@ func newState*(
     initialMode: SearchMode, initialShowDetails: bool, useVim: bool, startNimble: bool
 ): AppState =
   AppState(
-    pkgs: newSeqOfCap[CompactPackage](20000),
-    memoryPages: newSeq[string](),
-    repoList: @[],
+    pkgs: @[],
+    textBlocks: @[],
+    repos: @[],
+    systemDB: PackageDB(pkgs: @[], textBlocks: @[], repos: @[], isLoaded: false),
+    nimbleDB: PackageDB(pkgs: @[], textBlocks: @[], repos: @[], isLoaded: false),
     visibleIndices: @[],
-    localPkgCount: 0,
-    localPageCount: 0,
-    localRepoCount: 0,
     selected: initHashSet[string](),
     detailsCache: initTable[string, string](),
     cursor: 0,
@@ -103,6 +96,29 @@ func toggleSelection(state: var AppState) =
       state.selected.incl(id)
     if state.cursor < state.visibleIndices.len - 1:
       state.cursor.inc()
+
+proc saveCurrentToDB(state: var AppState) =
+  if state.dataSource == SourceSystem:
+    if state.searchMode == ModeLocal:
+      state.systemDB.pkgs = state.pkgs
+      state.systemDB.textBlocks = state.textBlocks
+      state.systemDB.repos = state.repos
+      state.systemDB.isLoaded = true
+  else:
+    state.nimbleDB.pkgs = state.pkgs
+    state.nimbleDB.textBlocks = state.textBlocks
+    state.nimbleDB.repos = state.repos
+    state.nimbleDB.isLoaded = true
+
+proc loadFromDB(state: var AppState, source: DataSource) =
+  if source == SourceSystem:
+    state.pkgs = state.systemDB.pkgs
+    state.textBlocks = state.systemDB.textBlocks
+    state.repos = state.systemDB.repos
+  else:
+    state.pkgs = state.nimbleDB.pkgs
+    state.textBlocks = state.nimbleDB.textBlocks
+    state.repos = state.nimbleDB.repos
 
 func handleVimCommand(state: var AppState, k: char) =
   case k
@@ -197,7 +213,6 @@ proc update*(state: AppState, msg: Msg, listHeight: int): AppState =
   case msg.kind
   of MsgInput:
     let k = msg.key
-
     if result.inputMode != ModeVimCommand:
       if k == KeyCtrlA:
         if result.dataSource == SourceSystem:
@@ -205,34 +220,43 @@ proc update*(state: AppState, msg: Msg, listHeight: int): AppState =
             result.searchMode = ModeHybrid
           else:
             result.searchMode = ModeLocal
-            if result.localPkgCount > 0:
-              result.pkgs.setLen(result.localPkgCount)
-              result.memoryPages.setLen(result.localPageCount)
-              result.repoList.setLen(result.localRepoCount)
+            if result.systemDB.isLoaded:
+              result.pkgs = result.systemDB.pkgs
+              result.textBlocks = result.systemDB.textBlocks
+              result.repos = result.systemDB.repos
               result.visibleIndices = filterIndices(result, result.searchBuffer)
               result.cursor = 0
         return
 
       if k == KeyCtrlN:
-        result.searchId.inc()
-        result.pkgs = newSeqOfCap[CompactPackage](0)
-        result.memoryPages = newSeq[string]()
-        result.repoList = newSeq[string]()
+        saveCurrentToDB(result)
 
+        result.searchId.inc()
         result.visibleIndices = @[]
         result.selected = initHashSet[string]()
         result.cursor = 0
         result.scroll = 0
         result.detailsCache = initTable[string, string]()
-        result.localPkgCount = 0
+        result.searchBuffer = ""
+        result.searchCursor = 0
 
         if result.dataSource == SourceSystem:
           result.dataSource = SourceNimble
-          requestLoadNimble(result.searchId)
+
+          loadFromDB(result, SourceNimble)
+          if not result.nimbleDB.isLoaded:
+            requestLoadNimble(result.searchId)
+          else:
+            result.visibleIndices = filterIndices(result, "")
         else:
           result.dataSource = SourceSystem
           result.searchMode = ModeLocal
-          requestLoadAll(result.searchId)
+
+          loadFromDB(result, SourceSystem)
+          if not result.systemDB.isLoaded:
+            requestLoadAll(result.searchId)
+          else:
+            result.visibleIndices = filterIndices(result, "")
         return
 
       if k == KeyCtrlS:
@@ -323,33 +347,38 @@ proc update*(state: AppState, msg: Msg, listHeight: int): AppState =
       return result
 
     if msg.isAppend:
-      var remoteRepoMap = newSeq[uint16](msg.repos.len)
+      var repoMap = newSeq[uint8](msg.repos.len)
       for i, r in msg.repos:
         var found = -1
-        for j, existing in result.repoList:
+        for j, existing in result.repos:
           if existing == r:
             found = j
             break
         if found == -1:
-          remoteRepoMap[i] = uint16(result.repoList.len)
-          result.repoList.add(r)
+          repoMap[i] = uint8(result.repos.len)
+          result.repos.add(r)
         else:
-          remoteRepoMap[i] = uint16(found)
+          repoMap[i] = uint8(found)
 
-      let basePageIdx = uint16(result.memoryPages.len)
-      for page in msg.pages:
-        result.memoryPages.add(page)
+      let blockIdx = uint16(result.textBlocks.len)
+      result.textBlocks.add(msg.textBlock)
 
-      for p in msg.packedPkgs:
+      for p in msg.pkgs:
         var newP = p
-        newP.repoIdx = remoteRepoMap[p.repoIdx]
-        newP.pageIdx += basePageIdx
+        newP.blockIdx = blockIdx
+        newP.repoIdx = repoMap[p.repoIdx]
         result.pkgs.add(newP)
 
-      if result.searchBuffer.len == 0 or result.dataSource == SourceNimble:
-        result.localPkgCount = result.pkgs.len
-        result.localPageCount = result.memoryPages.len
-        result.localRepoCount = result.repoList.len
+      if result.dataSource == SourceSystem and result.searchMode == ModeLocal:
+        result.systemDB.pkgs = result.pkgs
+        result.systemDB.textBlocks = result.textBlocks
+        result.systemDB.repos = result.repos
+        result.systemDB.isLoaded = true
+      elif result.dataSource == SourceNimble:
+        result.nimbleDB.pkgs = result.pkgs
+        result.nimbleDB.textBlocks = result.textBlocks
+        result.nimbleDB.repos = result.repos
+        result.nimbleDB.isLoaded = true
 
       if not result.viewingSelection:
         result.visibleIndices = filterIndices(result, result.searchBuffer)
@@ -364,12 +393,20 @@ proc update*(state: AppState, msg: Msg, listHeight: int): AppState =
         result.cursor = 0
         result.scroll = 0
     else:
-      result.pkgs = msg.packedPkgs
-      result.memoryPages = msg.pages
-      result.repoList = msg.repos
-      result.localPkgCount = result.pkgs.len
-      result.localPageCount = result.memoryPages.len
-      result.localRepoCount = result.repoList.len
+      result.pkgs = msg.pkgs
+      result.textBlocks = @[msg.textBlock]
+      result.repos = msg.repos
+
+      if result.dataSource == SourceSystem and result.searchMode == ModeLocal:
+        result.systemDB.pkgs = result.pkgs
+        result.systemDB.textBlocks = result.textBlocks
+        result.systemDB.repos = result.repos
+        result.systemDB.isLoaded = true
+      elif result.dataSource == SourceNimble:
+        result.nimbleDB.pkgs = result.pkgs
+        result.nimbleDB.textBlocks = result.textBlocks
+        result.nimbleDB.repos = result.repos
+        result.nimbleDB.isLoaded = true
 
       if not result.viewingSelection:
         result.visibleIndices = filterIndices(result, result.searchBuffer)
@@ -379,7 +416,7 @@ proc update*(state: AppState, msg: Msg, listHeight: int): AppState =
     result.isSearching = false
     result.justReceivedSearchResults = true
   of MsgDetailsLoaded:
-    if result.detailsCache.len >= MaxDetailsCache:
+    if result.detailsCache.len >= DetailsCacheLimit:
       result.detailsCache.clear()
     result.detailsCache[msg.pkgId] = msg.content
   of MsgError:

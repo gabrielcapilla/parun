@@ -24,130 +24,78 @@ type
 
   WorkerRes = Msg
 
-  PageBuilder* = object
-    pages*: seq[string]
-    currentPage*: string
-    pkgs*: seq[CompactPackage]
-    repoMap*: Table[string, uint16]
-    repos*: seq[string]
-
-func initPageBuilder*(): PageBuilder =
-  result.pages = @[]
-  result.currentPage = newStringOfCap(PageSize)
-  result.pkgs = newSeqOfCap[CompactPackage](1000)
-  result.repoMap = initTable[string, uint16]()
-  result.repos = @[]
-
-func addPackageData(
-    pb: var PageBuilder, name, ver: string, repoIdx: uint16, flags: uint8
-) =
-  let needed = name.len + 1 + ver.len + 1
-
-  if pb.currentPage.len + needed > PageSize:
-    pb.pages.add(pb.currentPage)
-    pb.currentPage = newStringOfCap(PageSize)
-
-  let offset = uint16(pb.currentPage.len)
-  let pageIdx = uint16(pb.pages.len)
-
-  pb.currentPage.add(name)
-  pb.currentPage.add('\0')
-  pb.currentPage.add(ver)
-  pb.currentPage.add('\0')
-
-  pb.pkgs.add(
-    CompactPackage(
-      pageIdx: pageIdx,
-      pageOffset: offset,
-      repoIdx: repoIdx,
-      nameLen: uint8(name.len),
-      flags: flags,
-    )
-  )
-
-proc flushBatch(
-    pb: var PageBuilder,
-    resChan: var Channel[WorkerRes],
-    searchId: int,
-    isNimble: bool,
-    startTime: MonoTime,
-) =
-  if pb.currentPage.len > 0:
-    pb.pages.add(pb.currentPage)
-    pb.currentPage = newStringOfCap(PageSize)
-
-  if pb.pkgs.len > 0:
-    let dur = (getMonoTime() - startTime).inMilliseconds.int
-
-    resChan.send(
-      Msg(
-        kind: MsgSearchResults,
-        packedPkgs: pb.pkgs,
-        pages: pb.pages,
-        repos:
-          if isNimble:
-            @["nimble"]
-          else:
-            pb.repos,
-        searchId: searchId,
-        isAppend: true,
-        durationMs: dur,
-      )
-    )
-
-    pb.pkgs = newSeqOfCap[CompactPackage](1000)
-    pb.pages = @[]
-    if not isNimble:
-      pb.repos = @[]
-      pb.repoMap = initTable[string, uint16]()
+  BatchBuilder = object
+    pkgs: seq[PackedPackage]
+    textBlock: string
+    repos: seq[string]
+    repoMap: Table[string, uint8]
 
 var
   reqChan: Channel[WorkerReq]
   resChan: Channel[WorkerRes]
   workerThread: Thread[string]
 
-proc parsePacmanOutput*(
-    line: string, pb: var PageBuilder, installedMap: Table[string, string]
+proc initBatchBuilder(): BatchBuilder =
+  result.pkgs = newSeqOfCap[PackedPackage](1000)
+  result.textBlock = newStringOfCap(BlockSize)
+  result.repos = @[]
+  result.repoMap = initTable[string, uint8]()
+
+proc flushBatch(
+    bb: var BatchBuilder,
+    resChan: var Channel[WorkerRes],
+    searchId: int,
+    startTime: MonoTime,
 ) =
-  var i = 0
-  let L = line.len
+  if bb.pkgs.len > 0:
+    let dur = (getMonoTime() - startTime).inMilliseconds.int
+    resChan.send(
+      Msg(
+        kind: MsgSearchResults,
+        pkgs: bb.pkgs,
+        textBlock: bb.textBlock,
+        repos: bb.repos,
+        searchId: searchId,
+        isAppend: true,
+        durationMs: dur,
+      )
+    )
 
-  let rStart = i
-  i += line.skipUntil({' '}, i)
-  if i >= L:
+    bb.pkgs.setLen(0)
+    bb.textBlock.setLen(0)
+
+    bb.repos.setLen(0)
+    bb.repoMap.clear()
+
+proc addPackage(bb: var BatchBuilder, name, ver, repo: string, installed: bool) =
+  if bb.textBlock.len + name.len + ver.len > BlockSize:
     return
-  let repoName = line[rStart ..< i]
 
-  i += line.skipWhitespace(i)
-
-  let nStart = i
-  i += line.skipUntil({' '}, i)
-  let nameLen = i - nStart
-  if nameLen <= 0 or nameLen > 255:
-    return
-  let nameStr = line[nStart ..< i]
-
-  i += line.skipWhitespace(i)
-
-  let vStart = i
-  i += line.skipUntil({' '}, i)
-  let verStr =
-    if i > vStart:
-      line[vStart ..< i]
+  var rIdx: uint8 = 0
+  if bb.repoMap.hasKey(repo):
+    rIdx = bb.repoMap[repo]
+  else:
+    if bb.repos.len < 255:
+      rIdx = uint8(bb.repos.len)
+      bb.repos.add(repo)
+      bb.repoMap[repo] = rIdx
     else:
-      "?"
+      rIdx = 0
 
-  var flags: uint8 = 0
-  if installedMap.hasKey(nameStr):
-    flags = 1
-  elif line.find("[installed]", i) > 0 or line.find("[instalado]", i) > 0:
-    flags = 1
+  let offset = uint16(bb.textBlock.len)
+  bb.textBlock.add(name)
+  bb.textBlock.add(ver)
 
-  if not pb.repoMap.hasKey(repoName):
-    pb.repoMap[repoName] = uint16(pb.repos.len)
-    pb.repos.add(repoName)
-
-  pb.addPackageData(nameStr, verStr, pb.repoMap[repoName], flags)
+  bb.pkgs.add(
+    PackedPackage(
+      blockIdx: 0,
+      offset: offset,
+      repoIdx: rIdx,
+      nameLen: uint8(name.len),
+      verLen: uint8(ver.len),
+      flags: if installed: 1 else: 0,
+    )
+  )
 
 proc skipJsonBlock(p: var JsonParser) =
   var depth = 1
@@ -195,21 +143,27 @@ proc workerLoop(tool: string) {.thread.} =
         )
         var outp = p.outputStream
         var line = ""
-
-        var pb = initPageBuilder()
+        var bb = initBatchBuilder()
         var counter = 0
         var interrupted = false
 
         while outp.readLine(line):
           if line.len == 0:
             continue
-          parsePacmanOutput(line, pb, instMap)
 
-          counter.inc()
-          if counter >= 1000:
-            pb.flushBatch(resChan, req.searchId, false, tStart)
+          var i = 0
+          var repo, name, ver: string
+          i += line.parseUntil(repo, ' ', i)
+          i += line.skipWhitespace(i)
+          i += line.parseUntil(name, ' ', i)
+          i += line.skipWhitespace(i)
+          i += line.parseUntil(ver, ' ', i)
+
+          let installed = instMap.hasKey(name) or (line.find("[installed]", i) > 0)
+
+          if bb.textBlock.len + name.len + ver.len > BlockSize or counter >= 1000:
+            flushBatch(bb, resChan, req.searchId, tStart)
             counter = 0
-
             let (hasNew, newReq) = reqChan.tryRecv()
             if hasNew:
               if newReq.kind == ReqDetails:
@@ -220,123 +174,115 @@ proc workerLoop(tool: string) {.thread.} =
                 interrupted = true
                 break
 
+          bb.addPackage(name, ver, repo, installed)
+          counter.inc()
+
         p.close()
         if not interrupted:
-          pb.flushBatch(resChan, req.searchId, false, tStart)
+          flushBatch(bb, resChan, req.searchId, tStart)
       of ReqLoadNimble:
         let tStart = getMonoTime()
         var installedSet = initHashSet[string]()
         let (listOut, _) = execCmdEx("nimble list -i --noColor")
         for line in listOut.splitLines:
           let parts = line.split(' ')
-          if parts.len > 0 and parts[0].len > 0:
+          if parts.len > 0:
             installedSet.incl(parts[0])
 
         let nimbleDir = getHomeDir() / ".nimble"
         let pkgFile = nimbleDir / "packages_official.json"
 
         if not fileExists(pkgFile):
-          resChan.send(Msg(kind: MsgError, errMsg: "package_official.json not found."))
+          resChan.send(Msg(kind: MsgError, errMsg: "package_official.json missing"))
           continue
 
         var fs = newFileStream(pkgFile, fmRead)
-        if fs == nil:
-          resChan.send(
-            Msg(kind: MsgError, errMsg: "Cannot open packages_official.json")
-          )
-          continue
-
-        var p: JsonParser
-        open(p, fs, pkgFile)
+        var parser: JsonParser
+        open(parser, fs, pkgFile)
         defer:
-          close(p)
+          close(parser)
 
-        var pb = initPageBuilder()
-        var interrupted = false
+        var bb = initBatchBuilder()
         var counter = 0
-        p.next()
+        var interrupted = false
+        parser.next()
 
-        while p.kind != jsonEof and p.kind != jsonError:
-          counter.inc()
-          if counter >= 500:
-            pb.flushBatch(resChan, req.searchId, true, tStart)
-            counter = 0
-            let (hasNew, newReq) = reqChan.tryRecv()
-            if hasNew:
-              if newReq.kind == ReqDetails:
-                discard
-              else:
-                currentReq = newReq
-                hasReq = true
-                interrupted = true
-                break
-
-          case p.kind
-          of jsonObjectStart:
-            var currentName = ""
-            p.next()
-            while p.kind != jsonObjectEnd and p.kind != jsonEof:
-              if p.kind == jsonString:
-                let key = p.str
-                p.next()
-                if key == "name" and p.kind == jsonString:
-                  currentName = p.str
-                  p.next()
+        while parser.kind != jsonEof and parser.kind != jsonError:
+          if parser.kind == jsonObjectStart:
+            var name = ""
+            parser.next()
+            while parser.kind != jsonObjectEnd and parser.kind != jsonEof:
+              if parser.kind == jsonString:
+                let key = parser.str
+                parser.next()
+                if key == "name" and parser.kind == jsonString:
+                  name = parser.str
+                  parser.next()
                 else:
-                  if p.kind == jsonObjectStart or p.kind == jsonArrayStart:
-                    skipJsonBlock(p)
-                    p.next()
+                  if parser.kind == jsonObjectStart or parser.kind == jsonArrayStart:
+                    skipJsonBlock(parser)
+                    parser.next()
                   else:
-                    p.next()
+                    parser.next()
               else:
-                p.next()
+                parser.next()
 
-            if currentName.len > 0 and currentName.len <= 255:
-              let flags: uint8 = if currentName in installedSet: 1 else: 0
-              pb.addPackageData(currentName, "latest", 0, flags)
+            if name.len > 0:
+              if bb.textBlock.len + name.len + 10 > BlockSize or counter >= 500:
+                flushBatch(bb, resChan, req.searchId, tStart)
+                counter = 0
+                let (hasNew, newReq) = reqChan.tryRecv()
+                if hasNew:
+                  if newReq.kind != ReqDetails:
+                    currentReq = newReq
+                    hasReq = true
+                    interrupted = true
+                    break
 
-            p.next()
+              bb.addPackage(name, "latest", "nimble", name in installedSet)
+              counter.inc()
+            parser.next()
           else:
-            p.next()
+            parser.next()
 
         fs.close()
         if not interrupted:
-          pb.flushBatch(resChan, req.searchId, true, tStart)
+          flushBatch(bb, resChan, req.searchId, tStart)
       of ReqSearch:
         let tStart = getMonoTime()
         if tool != "pacman" and req.query.len > 2:
           let args = ["-Ss", "--aur", "--color", "never", req.query]
           let p = startProcess(tool, args = args, options = {poUsePath})
-          var pb = initPageBuilder()
           let outLines = p.outputStream.readAll().splitLines()
           p.close()
+
+          var bb = initBatchBuilder()
 
           for line in outLines:
             if line.len == 0 or line.startsWith("    "):
               continue
-            let parts = line.split(' ')
-            if parts.len > 0:
-              let fullId = parts[0]
-              if '/' in fullId:
-                let s = fullId.split('/')
-                let repo = s[0]
-                let name = s[1]
-                let ver =
-                  if parts.len > 1:
-                    parts[1]
-                  else:
-                    "?"
-                var flags: uint8 = 0
-                if line.contains("[installed]") or line.contains("[instalado]"):
-                  flags = 1
 
-                if not pb.repoMap.hasKey(repo):
-                  pb.repoMap[repo] = uint16(pb.repos.len)
-                  pb.repos.add(repo)
+            var i = 0
+            var fullId, ver: string
+            i += line.parseUntil(fullId, ' ', i)
 
-                pb.addPackageData(name, ver, pb.repoMap[repo], flags)
+            var repo = "unknown"
+            var name = fullId
+            if '/' in fullId:
+              let s = fullId.split('/', 1)
+              repo = s[0]
+              name = s[1]
 
-          pb.flushBatch(resChan, req.searchId, false, tStart)
+            i += line.skipWhitespace(i)
+            i += line.parseUntil(ver, ' ', i)
+            let installed = line.contains("[installed]") or line.contains("[instalado]")
+
+            if bb.textBlock.len + name.len + ver.len > BlockSize:
+              flushBatch(bb, resChan, req.searchId, tStart)
+
+            bb.addPackage(name, ver, repo, installed)
+
+          flushBatch(bb, resChan, req.searchId, tStart)
       of ReqDetails:
         if req.source == SourceNimble:
           let p = startProcess(

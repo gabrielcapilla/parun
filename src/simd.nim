@@ -41,9 +41,7 @@ func scoreToken(startPtr: ptr char, len: int, pattern: string, patternVec: M128i
 
   while pos <= len - VectorSize:
     let chunkAddr = cast[ptr M128i](baseAddr + pos)
-
     let textVec = toLowerSimd(mm_loadu_si128(chunkAddr))
-
     let matches = mm_cmpeq_epi8(textVec, patternVec)
     let mask = mm_movemask_epi8(matches)
 
@@ -64,7 +62,6 @@ func scoreToken(startPtr: ptr char, len: int, pattern: string, patternVec: M128i
 
           if fullMatch:
             var localScore = 10
-
             if matchPos == 0:
               localScore += 20
             elif matchPos > 0:
@@ -74,7 +71,6 @@ func scoreToken(startPtr: ptr char, len: int, pattern: string, patternVec: M128i
 
             if (cast[ptr char](baseAddr + matchPos)[] == pattern[0]):
               localScore += 5
-
             return localScore
 
         currentMask = currentMask and not (1.uint16 shl offset)
@@ -98,28 +94,23 @@ func scoreToken(startPtr: ptr char, len: int, pattern: string, patternVec: M128i
           if prev in {' ', '-', '_'}:
             localScore += 20
         return localScore
-
     pos += 1
 
   return 0
 
-func scorePackageSimd*(
-    pageStr: string, offset: uint16, nameLen: uint8, ctx: SearchContext
-): int =
-  if not ctx.isValid or nameLen == 0:
+func scorePackageSimd*(textPtr: ptr char, len: int, ctx: SearchContext): int =
+  if not ctx.isValid or len == 0:
     return 0
 
-  let textPtr = cast[ptr char](unsafeAddr pageStr[offset])
-  let textLen = int(nameLen)
   var totalScore = 0
 
   for i, token in ctx.tokens:
-    let s = scoreToken(textPtr, textLen, token, ctx.firstCharVecs[i])
+    let s = scoreToken(textPtr, len, token, ctx.firstCharVecs[i])
     if s == 0:
       return 0
     totalScore += s
 
-  let density = float(ctx.tokens.join(" ").len) / float(textLen)
+  let density = float(ctx.tokens.join(" ").len) / float(len)
   totalScore = int(float(totalScore) * (1.0 + density))
 
   return totalScore
