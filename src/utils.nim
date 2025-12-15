@@ -1,4 +1,4 @@
-import std/[unicode]
+import std/unicode
 
 func stripAnsi*(s: string): string =
   if s.len == 0:
@@ -10,10 +10,8 @@ func stripAnsi*(s: string): string =
     let c = s[i]
     if c == '\e' and i + 1 < L and s[i + 1] == '[':
       inc(i, 2)
-
       while i < L and s[i] in {'0' .. '9', ';', '?', '!', '[', ']'}:
         inc(i)
-
       if i < L and s[i] in {'@' .. '~'}:
         inc(i)
     else:
@@ -26,7 +24,6 @@ func visibleWidth*(s: string): int =
     if ord(c) >= 128 or c == '\e':
       isAscii = false
       break
-
   if isAscii:
     return s.len
 

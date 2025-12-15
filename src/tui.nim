@@ -1,10 +1,9 @@
 import std/[strformat, strutils, sets, tables]
-import types, utils, core
+import types, utils, state
 
 const
   MinTermWidth = 50
   MinTermHeight = 10
-
   BoxTopLeft = "╭"
   BoxTopRight = "╮"
   BoxBottomLeft = "╰"
@@ -19,7 +18,6 @@ const
   SepSlash = "/"
   Space = " "
   InstalledTag = " \e[36m[installed]\e[0m"
-
   PrefixLen = 2
   InstalledLen = 12
   Spaces50 = "                                                  "
@@ -42,7 +40,6 @@ proc appendRow(
   var dVer = state.getVersion(p)
 
   let currentLen = dRepo.len + 1 + dName.len + 1 + dVer.len
-
   if currentLen > maxTextW:
     let repoNameLen = dRepo.len + 1 + dName.len
     if repoNameLen + 1 < maxTextW:
@@ -62,7 +59,6 @@ proc appendRow(
 
   if isCursor:
     buffer.add(ColorHighlightBg)
-
   if isSelected:
     if isCursor:
       buffer.add(CursorPrefixSel)
@@ -97,11 +93,9 @@ proc appendRow(
 
   if p.isInstalled:
     buffer.add(InstalledTag)
-
   let usedLen =
     PrefixLen + dRepo.len + (if dName.len > 0: 1 + dName.len else: 0) +
     (if dVer.len > 0: 1 + dVer.len else: 0) + tagW
-
   let pad = max(0, width - usedLen)
 
   if isCursor:
@@ -124,7 +118,6 @@ proc appendRow(
 
 proc renderUi*(state: AppState, buffer: var string, termH, termW: int): RenderResult =
   buffer.setLen(0)
-
   if termW < MinTermWidth or termH < MinTermHeight:
     buffer.add("\e[2J\e[H")
     buffer.add(fmt"{AnsiBold}Terminal size too small.{AnsiReset}")
@@ -132,7 +125,6 @@ proc renderUi*(state: AppState, buffer: var string, termH, termW: int): RenderRe
 
   let listH = max(1, termH - 2)
   let showDetails = state.showDetails and (termW >= 90)
-
   let listW =
     if showDetails:
       termW div 2
@@ -147,7 +139,6 @@ proc renderUi*(state: AppState, buffer: var string, termH, termW: int): RenderRe
 
   for r in 0 ..< listH:
     let rowIdx = state.scroll + (listH - 1 - r)
-
     if rowIdx >= 0 and rowIdx < state.visibleIndices.len:
       let realIdx = state.visibleIndices[rowIdx]
       let pId = state.getPkgId(realIdx)
@@ -173,7 +164,6 @@ proc renderUi*(state: AppState, buffer: var string, termH, termW: int): RenderRe
         buffer.add(ColorFrame)
         buffer.add(BoxVer)
         buffer.add(Reset)
-
         let contentRowIndex = r - 1
         var textContent = ""
         if state.visibleIndices.len > 0:
@@ -188,18 +178,15 @@ proc renderUi*(state: AppState, buffer: var string, termH, termW: int): RenderRe
           else:
             if contentRowIndex == 0:
               textContent = "Loading..."
-
         let visLen = visibleWidth(textContent)
         if visLen > detailTextW:
           buffer.add(truncate(textContent, detailTextW))
         else:
           buffer.add(textContent)
           buffer.add(repeat(" ", detailTextW - visLen))
-
         buffer.add(ColorFrame)
         buffer.add(BoxVer)
         buffer.add(Reset)
-
     buffer.add("\n")
 
   buffer.add(ColorFrame)
@@ -234,7 +221,6 @@ proc renderUi*(state: AppState, buffer: var string, termH, termW: int): RenderRe
 
   var leftSide = ""
   var cursorVisualX = 0
-
   if state.inputMode == ModeVimCommand:
     leftSide = fmt"{ColorPrompt}:{AnsiReset}{state.commandBuffer}"
     cursorVisualX = 1 + visibleWidth(state.commandBuffer)
@@ -257,5 +243,4 @@ proc renderUi*(state: AppState, buffer: var string, termH, termW: int): RenderRe
   buffer.add(leftSide)
   buffer.add(repeat(" ", spacing))
   buffer.add(rightSide)
-
   return (cursorX: cursorVisualX, cursorY: termH)

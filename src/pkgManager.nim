@@ -15,10 +15,7 @@ type
 
   WorkerReq = object
     kind: WorkerReqKind
-    query: string
-    pkgId: string
-    pkgName: string
-    pkgRepo: string
+    query, pkgId, pkgName, pkgRepo: string
     searchId: int
     source: DataSource
 
@@ -60,10 +57,8 @@ proc flushBatch(
         durationMs: dur,
       )
     )
-
     bb.pkgs.setLen(0)
     bb.textBlock.setLen(0)
-
     bb.repos.setLen(0)
     bb.repoMap.clear()
 
@@ -119,7 +114,6 @@ proc workerLoop(tool: string) {.thread.} =
     if not hasReq:
       currentReq = reqChan.recv()
       hasReq = true
-
     let req = currentReq
     hasReq = false
 
@@ -150,7 +144,6 @@ proc workerLoop(tool: string) {.thread.} =
         while outp.readLine(line):
           if line.len == 0:
             continue
-
           var i = 0
           var repo, name, ver: string
           i += line.parseUntil(repo, ' ', i)
@@ -166,17 +159,13 @@ proc workerLoop(tool: string) {.thread.} =
             counter = 0
             let (hasNew, newReq) = reqChan.tryRecv()
             if hasNew:
-              if newReq.kind == ReqDetails:
-                discard
-              else:
+              if newReq.kind != ReqDetails:
                 currentReq = newReq
                 hasReq = true
                 interrupted = true
                 break
-
           bb.addPackage(name, ver, repo, installed)
           counter.inc()
-
         p.close()
         if not interrupted:
           flushBatch(bb, resChan, req.searchId, tStart)
@@ -191,7 +180,6 @@ proc workerLoop(tool: string) {.thread.} =
 
         let nimbleDir = getHomeDir() / ".nimble"
         let pkgFile = nimbleDir / "packages_official.json"
-
         if not fileExists(pkgFile):
           resChan.send(Msg(kind: MsgError, errMsg: "package_official.json missing"))
           continue
@@ -201,7 +189,6 @@ proc workerLoop(tool: string) {.thread.} =
         open(parser, fs, pkgFile)
         defer:
           close(parser)
-
         var bb = initBatchBuilder()
         var counter = 0
         var interrupted = false
@@ -238,13 +225,11 @@ proc workerLoop(tool: string) {.thread.} =
                     hasReq = true
                     interrupted = true
                     break
-
               bb.addPackage(name, "latest", "nimble", name in installedSet)
               counter.inc()
             parser.next()
           else:
             parser.next()
-
         fs.close()
         if not interrupted:
           flushBatch(bb, resChan, req.searchId, tStart)
@@ -255,33 +240,25 @@ proc workerLoop(tool: string) {.thread.} =
           let p = startProcess(tool, args = args, options = {poUsePath})
           let outLines = p.outputStream.readAll().splitLines()
           p.close()
-
           var bb = initBatchBuilder()
-
           for line in outLines:
             if line.len == 0 or line.startsWith("    "):
               continue
-
             var i = 0
             var fullId, ver: string
             i += line.parseUntil(fullId, ' ', i)
-
             var repo = "unknown"
             var name = fullId
             if '/' in fullId:
               let s = fullId.split('/', 1)
               repo = s[0]
               name = s[1]
-
             i += line.skipWhitespace(i)
             i += line.parseUntil(ver, ' ', i)
             let installed = line.contains("[installed]") or line.contains("[instalado]")
-
             if bb.textBlock.len + name.len + ver.len > BlockSize:
               flushBatch(bb, resChan, req.searchId, tStart)
-
             bb.addPackage(name, ver, repo, installed)
-
           flushBatch(bb, resChan, req.searchId, tStart)
       of ReqDetails:
         if req.source == SourceNimble:

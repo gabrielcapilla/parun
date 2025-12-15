@@ -6,6 +6,7 @@ const VectorSize = 16
 type SearchContext* = object
   isValid*: bool
   tokens*: seq[string]
+  lowerTokens*: seq[string]
   firstCharVecs*: seq[M128i]
 
 func toLowerSimd(ch: M128i): M128i {.inline.} =
@@ -25,13 +26,17 @@ func prepareSearchContext*(query: string): SearchContext =
 
   result.isValid = true
   result.tokens = clean.splitWhitespace()
+  result.lowerTokens = newSeq[string](result.tokens.len)
   result.firstCharVecs = newSeq[M128i](result.tokens.len)
 
   for i, token in result.tokens:
     if token.len > 0:
+      result.lowerTokens[i] = token.toLowerAscii()
       result.firstCharVecs[i] = mm_set1_epi8(token[0].toLowerAscii.ord.int8)
 
-func scoreToken(startPtr: ptr char, len: int, pattern: string, patternVec: M128i): int =
+func scoreTokenExact(
+    startPtr: ptr char, len: int, pattern: string, patternVec: M128i
+): int =
   if pattern.len > len:
     return 0
 
@@ -61,20 +66,17 @@ func scoreToken(startPtr: ptr char, len: int, pattern: string, patternVec: M128i
               break
 
           if fullMatch:
-            var localScore = 10
+            var localScore = 100
             if matchPos == 0:
-              localScore += 20
+              localScore += 50
             elif matchPos > 0:
               let prev = cast[ptr char](baseAddr + matchPos - 1)[]
               if prev in {' ', '-', '_', '/'}:
-                localScore += 20
+                localScore += 40
 
-            if (cast[ptr char](baseAddr + matchPos)[] == pattern[0]):
-              localScore += 5
             return localScore
 
         currentMask = currentMask and not (1.uint16 shl offset)
-
     pos += VectorSize
 
   while pos <= len - patternLen:
@@ -86,26 +88,70 @@ func scoreToken(startPtr: ptr char, len: int, pattern: string, patternVec: M128i
           fullMatch = false
           break
       if fullMatch:
-        var localScore = 10
+        var localScore = 100
         if pos == 0:
-          localScore += 20
+          localScore += 50
         elif pos > 0:
           let prev = cast[ptr char](baseAddr + pos - 1)[]
           if prev in {' ', '-', '_'}:
-            localScore += 20
+            localScore += 40
         return localScore
     pos += 1
-
   return 0
+
+func scoreTokenFuzzy(startPtr: ptr char, len: int, pattern: string): int =
+  var score = 0
+  var pIdx = 0
+  var tIdx = 0
+  var lastMatchIdx = -1
+  var consecutive = 0
+  let baseAddr = cast[int](startPtr)
+
+  while pIdx < pattern.len and tIdx < len:
+    let pChar = pattern[pIdx]
+    let tChar = (cast[ptr char](baseAddr + tIdx)[]).toLowerAscii
+
+    if tChar == pChar:
+      score += 10
+
+      if lastMatchIdx != -1 and tIdx == lastMatchIdx + 1:
+        consecutive += 1
+        score += (5 * consecutive)
+      else:
+        consecutive = 0
+
+        if lastMatchIdx != -1:
+          let gap = tIdx - lastMatchIdx - 1
+          score -= gap
+
+      if tIdx == 0:
+        score += 20
+      elif tIdx > 0:
+        let prev = cast[ptr char](baseAddr + tIdx - 1)[]
+        if prev in {' ', '-', '_', '/'}:
+          score += 15
+
+      lastMatchIdx = tIdx
+      pIdx += 1
+
+    tIdx += 1
+
+  if pIdx < pattern.len:
+    return 0
+
+  return max(1, score)
 
 func scorePackageSimd*(textPtr: ptr char, len: int, ctx: SearchContext): int =
   if not ctx.isValid or len == 0:
     return 0
-
   var totalScore = 0
 
-  for i, token in ctx.tokens:
-    let s = scoreToken(textPtr, len, token, ctx.firstCharVecs[i])
+  for i, token in ctx.lowerTokens:
+    var s = scoreTokenExact(textPtr, len, token, ctx.firstCharVecs[i])
+
+    if s == 0:
+      s = scoreTokenFuzzy(textPtr, len, token)
+
     if s == 0:
       return 0
     totalScore += s
