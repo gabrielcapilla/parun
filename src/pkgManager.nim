@@ -1,7 +1,7 @@
 import
   std/[
     os, osproc, strutils, strformat, tables, streams, sets, parseutils, parsejson,
-    times, monotimes,
+    times, monotimes, httpclient, net,
   ]
 import types
 
@@ -26,6 +26,8 @@ type
     textBlock: string
     repos: seq[string]
     repoMap: Table[string, uint8]
+
+  NimbleMeta = tuple[url: string, tags: seq[string]]
 
 var
   reqChan: Channel[WorkerReq]
@@ -106,9 +108,142 @@ proc skipJsonBlock(p: var JsonParser) =
     else:
       discard
 
+proc getRawBaseUrl(repoUrl: string): string =
+  var cleanUrl = repoUrl.strip()
+
+  if cleanUrl.endsWith(" (git)"):
+    cleanUrl = cleanUrl[0 .. ^7]
+  elif cleanUrl.endsWith(" (hg)"):
+    cleanUrl = cleanUrl[0 .. ^6]
+
+  if cleanUrl.endsWith(".git"):
+    cleanUrl = cleanUrl[0 .. ^5]
+  if cleanUrl.endsWith("/"):
+    cleanUrl = cleanUrl[0 .. ^2]
+
+  if "github.com" in cleanUrl:
+    return cleanUrl.replace("github.com", "raw.githubusercontent.com")
+  elif "codeberg.org" in cleanUrl:
+    return cleanUrl & "/raw/branch"
+  elif "gitlab.com" in cleanUrl:
+    return cleanUrl & "/-/raw"
+  elif "sr.ht" in cleanUrl:
+    return cleanUrl & "/blob"
+
+  return ""
+
+proc parseNimbleInfo(raw: string, name, url: string, tags: seq[string]): string =
+  var info = initTable[string, string]()
+  var requires: seq[string] = @[]
+
+  for line in raw.splitLines():
+    let l = line.strip()
+    if l.len == 0 or l.startsWith("#"):
+      continue
+
+    let lowerL = l.toLowerAscii()
+
+    if lowerL.startsWith("requires"):
+      var rest = ""
+      if lowerL.startsWith("requires:"):
+        rest = l[9 ..^ 1].strip()
+      else:
+        rest = l[8 ..^ 1].strip()
+
+      if rest.startsWith("(") and rest.endsWith(")"):
+        rest = rest[1 ..^ 2]
+
+      for part in rest.split(','):
+        let dep = part.strip().strip(chars = {'"'})
+        if dep.len > 0:
+          requires.add(dep)
+    elif '=' in l:
+      let parts = l.split('=', 1)
+      let key = parts[0].strip().toLowerAscii()
+      let val = parts[1].strip().strip(chars = {'"'})
+
+      case key
+      of "version":
+        info["Version"] = val
+      of "author":
+        info["Author"] = val
+      of "description":
+        info["Description"] = val
+      of "license":
+        info["License"] = val
+      else:
+        discard
+
+  result = ""
+  result.add("Name           : " & name & "\n")
+  if info.hasKey("Version"):
+    result.add("Version        : " & info["Version"] & "\n")
+  if info.hasKey("Author"):
+    result.add("Author         : " & info["Author"] & "\n")
+  if info.hasKey("Description"):
+    result.add("Description    : " & info["Description"] & "\n")
+  if info.hasKey("License"):
+    result.add("License        : " & info["License"] & "\n")
+  result.add("URL            : " & url & "\n")
+  if tags.len > 0:
+    result.add("Tags           : " & tags.join(", ") & "\n")
+
+  if requires.len > 0:
+    result.add("Requires       :" & "\n")
+    for r in requires:
+      result.add("                 - " & r & "\n")
+
+proc formatFallbackInfo(raw: string): string =
+  var info = initTable[string, string]()
+
+  for line in raw.splitLines():
+    if line.strip().len == 0:
+      continue
+
+    if not line.startsWith(" "):
+      if line.endsWith(":"):
+        info["Name"] = line[0 ..^ 2]
+    else:
+      let l = line.strip()
+      if ':' in l:
+        let parts = l.split(':', 1)
+        let key = parts[0].strip().toLowerAscii()
+        let val = parts[1].strip()
+
+        case key
+        of "url":
+          info["URL"] = val
+        of "tags":
+          info["Tags"] = val
+        of "description":
+          info["Description"] = val
+        of "license":
+          info["License"] = val
+        of "version":
+          info["Version"] = val
+        else:
+          discard
+
+  result = ""
+  if info.hasKey("Name"):
+    result.add("Name           : " & info["Name"] & "\n")
+  if info.hasKey("Version"):
+    result.add("Version        : " & info["Version"] & "\n")
+  if info.hasKey("Description"):
+    result.add("Description    : " & info["Description"] & "\n")
+  if info.hasKey("License"):
+    result.add("License        : " & info["License"] & "\n")
+  if info.hasKey("URL"):
+    result.add("URL            : " & info["URL"] & "\n")
+  if info.hasKey("Tags"):
+    result.add("Tags           : " & info["Tags"] & "\n")
+  result.add("\n(Info from local nimble search cache)")
+
 proc workerLoop(tool: string) {.thread.} =
   var currentReq: WorkerReq
   var hasReq = false
+  var nimbleMetaCache = initTable[string, NimbleMeta]()
+  var client = newHttpClient(timeout = 3000)
 
   while true:
     if not hasReq:
@@ -120,6 +255,7 @@ proc workerLoop(tool: string) {.thread.} =
     try:
       case req.kind
       of ReqStop:
+        client.close()
         break
       of ReqLoadAll:
         let tStart = getMonoTime()
@@ -192,11 +328,14 @@ proc workerLoop(tool: string) {.thread.} =
         var bb = initBatchBuilder()
         var counter = 0
         var interrupted = false
+        nimbleMetaCache.clear()
         parser.next()
 
         while parser.kind != jsonEof and parser.kind != jsonError:
           if parser.kind == jsonObjectStart:
             var name = ""
+            var url = ""
+            var tags: seq[string] = @[]
             parser.next()
             while parser.kind != jsonObjectEnd and parser.kind != jsonEof:
               if parser.kind == jsonString:
@@ -204,6 +343,16 @@ proc workerLoop(tool: string) {.thread.} =
                 parser.next()
                 if key == "name" and parser.kind == jsonString:
                   name = parser.str
+                  parser.next()
+                elif key == "url" and parser.kind == jsonString:
+                  url = parser.str
+                  parser.next()
+                elif key == "tags" and parser.kind == jsonArrayStart:
+                  parser.next()
+                  while parser.kind != jsonArrayEnd and parser.kind != jsonEof:
+                    if parser.kind == jsonString:
+                      tags.add(parser.str)
+                    parser.next()
                   parser.next()
                 else:
                   if parser.kind == jsonObjectStart or parser.kind == jsonArrayStart:
@@ -215,6 +364,9 @@ proc workerLoop(tool: string) {.thread.} =
                 parser.next()
 
             if name.len > 0:
+              if url.len > 0:
+                nimbleMetaCache[name] = (url: url, tags: tags)
+
               if bb.textBlock.len + name.len + 10 > BlockSize or counter >= 500:
                 flushBatch(bb, resChan, req.searchId, tStart)
                 counter = 0
@@ -262,12 +414,50 @@ proc workerLoop(tool: string) {.thread.} =
           flushBatch(bb, resChan, req.searchId, tStart)
       of ReqDetails:
         if req.source == SourceNimble:
-          let p = startProcess(
-            "nimble", args = ["search", req.pkgName], options = {poUsePath}
-          )
-          let c = p.outputStream.readAll()
-          p.close()
-          resChan.send(Msg(kind: MsgDetailsLoaded, pkgId: req.pkgId, content: c))
+          var content = ""
+          var fetched = false
+          var meta: NimbleMeta = (url: "", tags: @[])
+
+          if nimbleMetaCache.hasKey(req.pkgName):
+            meta = nimbleMetaCache[req.pkgName]
+            let rawBase = getRawBaseUrl(meta.url)
+
+            if rawBase.len > 0:
+              let branches = ["master", "main"]
+
+              var names = @[req.pkgName]
+              if req.pkgName != req.pkgName.toLowerAscii():
+                names.add(req.pkgName.toLowerAscii())
+
+              for branch in branches:
+                for nameVariant in names:
+                  let attemptUrl =
+                    rawBase & "/" & branch & "/" & nameVariant & ".nimble"
+                  try:
+                    let rawContent = client.getContent(attemptUrl)
+                    content =
+                      parseNimbleInfo(rawContent, req.pkgName, meta.url, meta.tags)
+                    fetched = true
+                    break
+                  except:
+                    continue
+                if fetched:
+                  break
+
+          if fetched:
+            resChan.send(
+              Msg(kind: MsgDetailsLoaded, pkgId: req.pkgId, content: content)
+            )
+          else:
+            let p = startProcess(
+              "nimble", args = ["search", req.pkgName], options = {poUsePath}
+            )
+            let c = p.outputStream.readAll()
+            p.close()
+            let formatted = formatFallbackInfo(c)
+            resChan.send(
+              Msg(kind: MsgDetailsLoaded, pkgId: req.pkgId, content: formatted)
+            )
         else:
           let target =
             if req.pkgRepo == "local":
