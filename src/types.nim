@@ -1,4 +1,4 @@
-import std/[sets, tables]
+import std/[sets, tables, monotimes]
 
 const
   DetailsCacheLimit* = 16
@@ -140,6 +140,10 @@ type
 
     searchMode*: SearchMode
     dataSource*: DataSource
+
+    baseSearchMode*: SearchMode
+    baseDataSource*: DataSource
+
     inputMode*: InputMode
     viewingSelection*: bool
 
@@ -151,8 +155,12 @@ type
     shouldUninstall*: bool
     showDetails*: bool
     justReceivedSearchResults*: bool
+    statusMessage*: string
 
     detailScroll*: int
+
+    lastInputTime*: MonoTime
+    debouncePending*: bool
 
 func isInstalled*(p: PackedPackage): bool {.inline.} =
   (p.flags and 1) != 0
