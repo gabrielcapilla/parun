@@ -1,71 +1,75 @@
 import std/[sets, tables]
 import types, state, input, pkgManager
 
+proc processInput*(state: var AppState, k: char, listHeight: int) =
+  if state.inputMode != ModeVimCommand:
+    if k == KeyCtrlA:
+      if state.dataSource == SourceSystem:
+        if state.searchMode == ModeLocal:
+          state.searchMode = ModeHybrid
+        else:
+          state.searchMode = ModeLocal
+          if state.systemDB.isLoaded:
+            state.pkgs = state.systemDB.pkgs
+            state.textBlocks = state.systemDB.textBlocks
+            state.repos = state.systemDB.repos
+            state.visibleIndices = filterIndices(state, state.searchBuffer)
+            state.cursor = 0
+      return
+
+    if k == KeyCtrlN:
+      saveCurrentToDB(state)
+      state.searchId.inc()
+      state.visibleIndices = @[]
+      state.selected = initHashSet[string]()
+      state.cursor = 0
+      state.scroll = 0
+      state.detailsCache = initTable[string, string]()
+      state.searchBuffer = ""
+      state.searchCursor = 0
+
+      if state.dataSource == SourceSystem:
+        state.dataSource = SourceNimble
+        loadFromDB(state, SourceNimble)
+        if not state.nimbleDB.isLoaded:
+          requestLoadNimble(state.searchId)
+        else:
+          state.visibleIndices = filterIndices(state, "")
+      else:
+        state.dataSource = SourceSystem
+        state.searchMode = ModeLocal
+        loadFromDB(state, SourceSystem)
+        if not state.systemDB.isLoaded:
+          requestLoadAll(state.searchId)
+        else:
+          state.visibleIndices = filterIndices(state, "")
+      return
+
+    if k == KeyCtrlS:
+      state.viewingSelection = not state.viewingSelection
+      state.cursor = 0
+      state.scroll = 0
+      if state.viewingSelection:
+        state.visibleIndices = filterBySelection(state)
+      else:
+        state.visibleIndices = filterIndices(state, state.searchBuffer)
+      return
+
+    if k == KeyF1:
+      state.showDetails = not state.showDetails
+      return
+
+  handleInput(state, k, listHeight)
+
 proc update*(state: AppState, msg: Msg, listHeight: int): AppState =
   result = state
   result.needsRedraw = true
 
   case msg.kind
   of MsgInput:
-    let k = msg.key
-    if result.inputMode != ModeVimCommand:
-      if k == KeyCtrlA:
-        if result.dataSource == SourceSystem:
-          if result.searchMode == ModeLocal:
-            result.searchMode = ModeHybrid
-          else:
-            result.searchMode = ModeLocal
-            if result.systemDB.isLoaded:
-              result.pkgs = result.systemDB.pkgs
-              result.textBlocks = result.systemDB.textBlocks
-              result.repos = result.systemDB.repos
-              result.visibleIndices = filterIndices(result, result.searchBuffer)
-              result.cursor = 0
-        return
-
-      if k == KeyCtrlN:
-        saveCurrentToDB(result)
-        result.searchId.inc()
-        result.visibleIndices = @[]
-        result.selected = initHashSet[string]()
-        result.cursor = 0
-        result.scroll = 0
-        result.detailsCache = initTable[string, string]()
-        result.searchBuffer = ""
-        result.searchCursor = 0
-
-        if result.dataSource == SourceSystem:
-          result.dataSource = SourceNimble
-          loadFromDB(result, SourceNimble)
-          if not result.nimbleDB.isLoaded:
-            requestLoadNimble(result.searchId)
-          else:
-            result.visibleIndices = filterIndices(result, "")
-        else:
-          result.dataSource = SourceSystem
-          result.searchMode = ModeLocal
-          loadFromDB(result, SourceSystem)
-          if not result.systemDB.isLoaded:
-            requestLoadAll(result.searchId)
-          else:
-            result.visibleIndices = filterIndices(result, "")
-        return
-
-      if k == KeyCtrlS:
-        result.viewingSelection = not result.viewingSelection
-        result.cursor = 0
-        result.scroll = 0
-        if result.viewingSelection:
-          result.visibleIndices = filterBySelection(result)
-        else:
-          result.visibleIndices = filterIndices(result, result.searchBuffer)
-        return
-
-      if k == KeyF1:
-        result.showDetails = not result.showDetails
-        return
-
-    handleInput(result, k, listHeight)
+    processInput(result, msg.key, listHeight)
+  of MsgInputNew:
+    processInput(result, msg.legacyKey, listHeight)
   of MsgSearchResults:
     if msg.searchId != result.searchId:
       return result
