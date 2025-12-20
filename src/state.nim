@@ -1,4 +1,4 @@
-import std/[strutils, sets, tables, algorithm, math]
+import std/[strutils, sets, tables, algorithm, math, sequtils]
 import types, simd
 
 template getName*(state: AppState, p: PackedPackage): string =
@@ -25,10 +25,7 @@ func filterIndices*(state: AppState, query: string): seq[int32] =
   let cleanQuery = effective.strip()
 
   if cleanQuery.len == 0:
-    result = newSeq[int32](state.pkgs.len)
-    for i in 0 ..< state.pkgs.len:
-      result[i] = int32(i)
-    return
+    return toSeq(0 ..< state.pkgs.len).mapIt(int32(it))
 
   let ctx = prepareSearchContext(cleanQuery)
   if not ctx.isValid:
@@ -47,14 +44,12 @@ func filterIndices*(state: AppState, query: string): seq[int32] =
 
   scored.sort do(a, b: auto) -> int:
     cmp(b.score, a.score)
-  result = newSeqOfCap[int32](scored.len)
-  for item in scored:
-    result.add(item.idx)
+  return scored.mapIt(it.idx)
 
 func filterBySelection*(state: AppState): seq[int32] =
-  result = newSeqOfCap[int32](state.selected.len)
   if state.selected.len == 0:
-    return
+    return @[]
+  result = newSeqOfCap[int32](state.selected.len)
   for i in 0 ..< state.pkgs.len:
     let id = state.getPkgId(int32(i))
     if id in state.selected:
