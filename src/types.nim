@@ -4,6 +4,7 @@ const
   DetailsCacheLimit* = 16
   BlockSize* = 64 * 1024
 
+  KeyNull* = char(0)
   KeyCtrlA* = char(1)
   KeyCtrlB* = char(2)
   KeyCtrlC* = char(3)
@@ -17,10 +18,18 @@ const
   KeyCtrlR* = char(18)
   KeyCtrlS* = char(19)
   KeyCtrlU* = char(21)
+  KeyCtrlW* = char(23)
   KeyCtrlY* = char(25)
+  KeyCtrlZ* = char(26)
   KeyEsc* = char(27)
   KeySpace* = char(32)
   KeyBack* = char(127)
+  KeyCtrlBackspace* = char(28)
+  KeyAltBackspace* = char(29)
+
+  KeyDelete* = char(209)
+  KeyCtrlLeft* = char(220)
+  KeyCtrlRight* = char(221)
 
   KeyUp* = char(200)
   KeyDown* = char(201)
@@ -78,6 +87,7 @@ type
 
   MsgKind* = enum
     MsgInput
+    MsgInputNew
     MsgTick
     MsgSearchResults
     MsgDetailsLoaded
@@ -87,6 +97,8 @@ type
     case kind*: MsgKind
     of MsgInput:
       key*: char
+    of MsgInputNew:
+      legacyKey*: char
     of MsgTick:
       discard
     of MsgSearchResults:
