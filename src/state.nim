@@ -1,4 +1,4 @@
-import std/[strutils, sets, tables, algorithm, math, sequtils]
+import std/[strutils, sets, tables, algorithm, math, sequtils, monotimes]
 import types, simd
 
 template getName*(state: AppState, p: PackedPackage): string =
@@ -17,6 +17,10 @@ func getPkgId*(state: AppState, idx: int32): string =
 
 func getEffectiveQuery*(buffer: string): string =
   if buffer.startsWith("aur/"):
+    return buffer[4 ..^ 1]
+  if buffer.startsWith("nimble/"):
+    return buffer[7 ..^ 1]
+  if buffer.startsWith("nim/"):
     return buffer[4 ..^ 1]
   return buffer
 
@@ -55,9 +59,10 @@ func filterBySelection*(state: AppState): seq[int32] =
     if id in state.selected:
       result.add(int32(i))
 
-func newState*(
+proc newState*(
     initialMode: SearchMode, initialShowDetails: bool, useVim: bool, startNimble: bool
 ): AppState =
+  let ds = if startNimble: SourceNimble else: SourceSystem
   AppState(
     pkgs: @[],
     textBlocks: @[],
@@ -72,13 +77,18 @@ func newState*(
     searchBuffer: "",
     commandBuffer: "",
     searchMode: initialMode,
+    dataSource: ds,
+    baseSearchMode: initialMode,
+    baseDataSource: ds,
     isSearching: false,
     showDetails: initialShowDetails,
     detailScroll: 0,
     viewingSelection: false,
     inputMode: if useVim: ModeVimNormal else: ModeStandard,
-    dataSource: if startNimble: SourceNimble else: SourceSystem,
     searchId: 1,
+    lastInputTime: getMonoTime(),
+    debouncePending: false,
+    statusMessage: "",
   )
 
 proc saveCurrentToDB*(state: var AppState) =
