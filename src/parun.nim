@@ -1,5 +1,5 @@
 import std/[terminal, os, selectors, posix, strutils, parseopt, sets, tables]
-import types, core, tui, pkgManager, terminal as term, state
+import types, core, tui, pkgManager, terminal as term, state, keyboard
 
 proc main() =
   var
@@ -122,10 +122,13 @@ proc main() =
         discard posix.read(resizePipe[0], addr b, 1)
         appState.needsRedraw = true
       elif key.fd == STDIN_FILENO:
-        let k = readInputSafe()
+        let k = getKeyAsync()
         if k != '\0':
           let listH = max(1, terminalHeight() - 2)
           appState = update(appState, Msg(kind: MsgInput, key: k), listH)
+
+          if appState.shouldQuit:
+            break
 
           let inInsert =
             appState.inputMode == ModeStandard or appState.inputMode == ModeVimInsert
@@ -146,6 +149,9 @@ proc main() =
     for msg in pollWorkerMessages():
       let listH = max(1, terminalHeight() - 2)
       appState = update(appState, msg, listH)
+
+      if appState.shouldQuit:
+        break
 
 when isMainModule:
   main()
