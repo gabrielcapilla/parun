@@ -1,14 +1,14 @@
 import std/[strutils, tables, unicode]
 import types, state
 
-proc deleteCharLeft(state: var AppState) =
+func deleteCharLeft(state: var AppState) =
   if state.searchCursor > 0:
     state.searchBuffer.delete(state.searchCursor - 1 .. state.searchCursor - 1)
     state.searchCursor.dec()
     state.visibleIndices = filterIndices(state, state.searchBuffer)
     state.cursor = 0
 
-proc deleteWordLeft(state: var AppState) =
+func deleteWordLeft(state: var AppState) =
   if state.searchCursor == 0:
     return
 
@@ -61,13 +61,13 @@ proc deleteWordLeft(state: var AppState) =
     state.visibleIndices = filterIndices(state, state.searchBuffer)
     state.cursor = 0
 
-proc deleteCharRight(state: var AppState) =
+func deleteCharRight(state: var AppState) =
   if state.searchCursor < state.searchBuffer.len:
     state.searchBuffer.delete(state.searchCursor .. state.searchCursor)
     state.visibleIndices = filterIndices(state, state.searchBuffer)
     state.cursor = 0
 
-proc insertChar(state: var AppState, c: char) =
+func insertChar(state: var AppState, c: char) =
   if state.viewingSelection:
     state.viewingSelection = false
   state.searchBuffer.insert($c, state.searchCursor)
@@ -75,7 +75,7 @@ proc insertChar(state: var AppState, c: char) =
   state.visibleIndices = filterIndices(state, state.searchBuffer)
   state.cursor = 0
 
-proc moveCursorWordLeft(state: var AppState) =
+func moveCursorWordLeft(state: var AppState) =
   if state.searchCursor > 0:
     while state.searchCursor > 0 and state.searchBuffer[state.searchCursor - 1] == ' ':
       state.searchCursor.dec()
@@ -83,7 +83,7 @@ proc moveCursorWordLeft(state: var AppState) =
     while state.searchCursor > 0 and state.searchBuffer[state.searchCursor - 1] != ' ':
       state.searchCursor.dec()
 
-proc moveCursorWordRight(state: var AppState) =
+func moveCursorWordRight(state: var AppState) =
   var foundWord = false
 
   while state.searchCursor < state.searchBuffer.len and
@@ -219,7 +219,7 @@ proc handleVimInsert(state: var AppState, k: char, listHeight: int) =
     if k.ord >= 32 and k.ord <= 126:
       insertChar(state, k)
 
-proc handleStandard(state: var AppState, k: char, listHeight: int) =
+func handleStandard(state: var AppState, k: char, listHeight: int) =
   case k
   of KeyUp:
     if state.visibleIndices.len > 0:
@@ -267,7 +267,7 @@ proc handleStandard(state: var AppState, k: char, listHeight: int) =
     if k.ord >= 32 and k.ord <= 126:
       insertChar(state, k)
 
-proc handleInput*(state: var AppState, k: char, listHeight: int) =
+func handleInput*(state: var AppState, k: char, listHeight: int) =
   case state.inputMode
   of ModeVimCommand:
     handleVimCommand(state, k)

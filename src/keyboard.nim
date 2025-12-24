@@ -1,13 +1,13 @@
 import std/[posix]
 import types
 
-proc readByte(): int =
+func readByte(): int =
   var b: char
   if posix.read(STDIN_FILENO, addr b, 1) == 1:
     return ord(b)
   return -1
 
-proc parseCsiSequence(): char =
+func parseCsiSequence(): char =
   let b3 = readByte()
   if b3 == -1:
     return KeyEsc
@@ -92,7 +92,7 @@ proc parseCsiSequence(): char =
   else:
     return KeyNull
 
-proc parseSs3Sequence(): char =
+func parseSs3Sequence(): char =
   let b3 = readByte()
   case b3
   of ord('P'):
@@ -110,7 +110,7 @@ proc parseSs3Sequence(): char =
   else:
     return KeyNull
 
-proc parseSpecialKeySequence(): char =
+func parseSpecialKeySequence(): char =
   let b2 = readByte()
   if b2 == -1:
     return KeyEsc
@@ -154,5 +154,5 @@ proc getKeyAsync*(): char =
   discard fcntl(STDIN_FILENO, F_SETFL, oldFlags)
   return keyValue
 
-proc convertToLegacyChar*(k: char): char =
+func convertToLegacyChar*(k: char): char =
   return k
