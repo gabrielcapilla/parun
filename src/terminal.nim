@@ -48,7 +48,7 @@ proc sleepMicros(us: int) =
   var rem: Timespec
   discard nanosleep(req, rem)
 
-proc readByte(): int =
+func readByte(): int =
   var b: char
   if posix.read(STDIN_FILENO, addr b, 1) == 1:
     return ord(b)
