@@ -1,54 +1,12 @@
-import std/[sets, tables, strutils, monotimes, times]
+import std/[tables, strutils, monotimes, times]
 import types, state, input, pkgManager
-
-proc switchToNimble(state: var AppState) =
-  if state.dataSource != SourceNimble:
-    state.visibleIndices = @[]
-    saveCurrentToDB(state)
-    state.dataSource = SourceNimble
-    state.searchId.inc()
-    state.cursor = 0
-    state.scroll = 0
-    state.selected.clear()
-
-    loadFromDB(state, SourceNimble)
-    if not state.nimbleDB.isLoaded:
-      requestLoadNimble(state.searchId)
-    else:
-      state.visibleIndices = filterIndices(state, state.searchBuffer)
-
-proc switchToSystem(state: var AppState, mode: SearchMode) =
-  if state.dataSource != SourceSystem or state.searchMode != mode:
-    state.visibleIndices = @[]
-    saveCurrentToDB(state)
-    state.dataSource = SourceSystem
-    state.searchMode = mode
-    state.searchId.inc()
-    state.cursor = 0
-    state.scroll = 0
-    state.selected.clear()
-
-    loadFromDB(state, SourceSystem)
-    if not state.systemDB.isLoaded:
-      requestLoadAll(state.searchId)
-    else:
-      state.visibleIndices = filterIndices(state, state.searchBuffer)
-
-proc restoreBaseState(state: var AppState) =
-  if state.baseDataSource == SourceNimble:
-    switchToNimble(state)
-  else:
-    switchToSystem(state, state.baseSearchMode)
 
 proc processInput*(state: var AppState, k: char, listHeight: int) =
   if state.inputMode != ModeVimCommand:
     if k == KeyCtrlA:
       if state.dataSource == SourceSystem:
-        if state.baseSearchMode == ModeLocal:
-          state.baseSearchMode = ModeHybrid
-        else:
-          state.baseSearchMode = ModeLocal
-
+        state.baseSearchMode =
+          if state.baseSearchMode == ModeLocal: ModeHybrid else: ModeLocal
         if not (
           state.searchBuffer.startsWith("aur/") or
           state.searchBuffer.startsWith("nimble/") or
@@ -63,7 +21,6 @@ proc processInput*(state: var AppState, k: char, listHeight: int) =
       else:
         state.baseDataSource = SourceSystem
         state.baseSearchMode = ModeLocal
-
       restoreBaseState(state)
       return
 
@@ -71,10 +28,11 @@ proc processInput*(state: var AppState, k: char, listHeight: int) =
       state.viewingSelection = not state.viewingSelection
       state.cursor = 0
       state.scroll = 0
-      if state.viewingSelection:
-        state.visibleIndices = filterBySelection(state)
-      else:
-        state.visibleIndices = filterIndices(state, state.searchBuffer)
+      state.visibleIndices =
+        if state.viewingSelection:
+          filterBySelection(state)
+        else:
+          filterIndices(state, state.searchBuffer)
       return
 
     if k == KeyF1:
@@ -97,7 +55,6 @@ proc processInput*(state: var AppState, k: char, listHeight: int) =
         switchToSystem(state, ModeHybrid)
       else:
         state.searchMode = ModeHybrid
-
       state.debouncePending = true
       state.statusMessage = "Waiting..."
     else:
@@ -105,7 +62,6 @@ proc processInput*(state: var AppState, k: char, listHeight: int) =
         restoreBaseState(state)
       elif state.dataSource == SourceSystem and state.searchMode != state.baseSearchMode:
         restoreBaseState(state)
-
       state.visibleIndices = filterIndices(state, state.searchBuffer)
       state.debouncePending = false
       state.statusMessage = ""
@@ -121,8 +77,7 @@ proc update*(state: AppState, msg: Msg, listHeight: int): AppState =
     processInput(result, msg.legacyKey, listHeight)
   of MsgTick:
     if result.debouncePending:
-      let now = getMonoTime()
-      if (now - result.lastInputTime).inMilliseconds > 500:
+      if (getMonoTime() - result.lastInputTime).inMilliseconds > 500:
         result.debouncePending = false
         let effectiveQuery = getEffectiveQuery(result.searchBuffer)
         if effectiveQuery.len > 1:
@@ -136,8 +91,8 @@ proc update*(state: AppState, msg: Msg, listHeight: int): AppState =
   of MsgSearchResults:
     if msg.searchId != result.searchId:
       return result
-
     result.statusMessage = ""
+
     if msg.isAppend:
       var repoMap = newSeq[uint8](msg.repos.len)
       for i, r in msg.repos:
@@ -154,7 +109,6 @@ proc update*(state: AppState, msg: Msg, listHeight: int): AppState =
 
       let blockIdx = uint16(result.textBlocks.len)
       result.textBlocks.add(msg.textBlock)
-
       for p in msg.pkgs:
         var newP = p
         newP.blockIdx = blockIdx
@@ -190,7 +144,6 @@ proc update*(state: AppState, msg: Msg, listHeight: int): AppState =
       result.pkgs = msg.pkgs
       result.textBlocks = @[msg.textBlock]
       result.repos = msg.repos
-
       if result.dataSource == SourceSystem and result.searchMode == ModeLocal:
         result.systemDB.pkgs = result.pkgs
         result.systemDB.textBlocks = result.textBlocks
@@ -204,10 +157,8 @@ proc update*(state: AppState, msg: Msg, listHeight: int): AppState =
 
       if not result.viewingSelection:
         result.visibleIndices = filterIndices(result, result.searchBuffer)
-
       result.cursor = 0
       result.scroll = 0
-
       if result.visibleIndices.len == 0 and result.dataSource == SourceNimble and
           result.searchBuffer.len > 0:
         result.statusMessage = "No results in Nimble"
