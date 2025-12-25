@@ -59,8 +59,10 @@ proc readInputSafe*(): char =
   if b1 == -1:
     return '\0'
 
-  if b1 == 10 or b1 == 13:
+  if b1 == 13:
     return KeyEnter
+  if b1 == 10:
+    return KeyCtrlJ
   if b1 == 127:
     return KeyBack
   if b1 == 8:
