@@ -66,6 +66,7 @@ const
 type
   SearchMode* = enum
     ModeLocal
+    ModeAUR
 
   DataSource* = enum
     SourceSystem
@@ -148,6 +149,8 @@ type
 
     isSearching*: bool
     searchId*: int
+    dataSearchId*: int
+
     needsRedraw*: bool
     shouldQuit*: bool
     shouldInstall*: bool
