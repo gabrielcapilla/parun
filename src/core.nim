@@ -3,27 +3,6 @@ import types, state, input, pkgManager
 
 proc processInput*(state: var AppState, k: char, listHeight: int) =
   if state.inputMode != ModeVimCommand:
-    if k == KeyCtrlA:
-      if state.dataSource == SourceSystem:
-        state.baseSearchMode =
-          if state.baseSearchMode == ModeLocal: ModeHybrid else: ModeLocal
-        if not (
-          state.searchBuffer.startsWith("aur/") or
-          state.searchBuffer.startsWith("nimble/") or
-          state.searchBuffer.startsWith("nim/")
-        ):
-          switchToSystem(state, state.baseSearchMode)
-      return
-
-    if k == KeyCtrlN:
-      if state.baseDataSource == SourceSystem:
-        state.baseDataSource = SourceNimble
-      else:
-        state.baseDataSource = SourceSystem
-        state.baseSearchMode = ModeLocal
-      restoreBaseState(state)
-      return
-
     if k == KeyCtrlS:
       state.viewingSelection = not state.viewingSelection
       state.cursor = 0
@@ -52,11 +31,10 @@ proc processInput*(state: var AppState, k: char, listHeight: int) =
       state.debouncePending = false
     elif isAurQuery:
       if state.dataSource != SourceSystem:
-        switchToSystem(state, ModeHybrid)
+        switchToSystem(state, ModeLocal)
       else:
-        state.searchMode = ModeHybrid
+        state.searchMode = ModeLocal
       state.debouncePending = true
-      state.statusMessage = "Waiting..."
     else:
       if state.dataSource != state.baseDataSource:
         restoreBaseState(state)
