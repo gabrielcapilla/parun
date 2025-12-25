@@ -225,6 +225,9 @@ proc workerLoop(toolType: PkgManagerType) {.thread.} =
       of ReqSearch:
         let tStart = getMonoTime()
 
+        let (instOut, _) = execCmdEx("pacman -Q")
+        let instMap = parseInstalledPackages(instOut)
+
         if req.query.startsWith("aur/"):
           let actualQuery = req.query[4 .. ^1]
           let p = startProcess(
@@ -251,12 +254,8 @@ proc workerLoop(toolType: PkgManagerType) {.thread.} =
             i += line.parseUntil(ver, ' ', i)
             if bb.textChunk.len + name.len + ver.len > BatchSize:
               flushBatch(bb, resChan, req.searchId, tStart)
-            bb.addPackage(
-              name,
-              ver,
-              repo,
-              line.contains("[installed]") or line.contains("[instalado]"),
-            )
+
+            bb.addPackage(name, ver, repo, instMap.hasKey(name))
           flushBatch(bb, resChan, req.searchId, tStart)
         else:
           let (outp, _) = execCmdEx(toolDef.bin & toolDef.searchCmd & req.query)
@@ -277,12 +276,8 @@ proc workerLoop(toolType: PkgManagerType) {.thread.} =
             i += line.parseUntil(ver, ' ', i)
             if bb.textChunk.len + name.len + ver.len > BatchSize:
               flushBatch(bb, resChan, req.searchId, tStart)
-            bb.addPackage(
-              name,
-              ver,
-              repo,
-              line.contains("[installed]") or line.contains("[instalado]"),
-            )
+
+            bb.addPackage(name, ver, repo, instMap.hasKey(name))
           flushBatch(bb, resChan, req.searchId, tStart)
       of ReqDetails:
         if req.source == SourceNimble:
