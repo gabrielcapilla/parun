@@ -4,7 +4,6 @@ import types, simd, pkgManager
 template getName*(state: AppState, idx: int): string =
   let offset = int(state.soa.locators[idx])
   let len = int(state.soa.nameLens[idx])
-
   cast[string](state.textArena[offset ..< offset + len])
 
 template getVersion*(state: AppState, idx: int): string =
@@ -31,6 +30,10 @@ func getEffectiveQuery*(buffer: string): string =
 func filterIndices*(state: AppState, query: string): seq[int32] =
   let effective = getEffectiveQuery(query)
   let cleanQuery = effective.strip()
+
+  if state.searchMode == ModeAUR and cleanQuery.len == 0:
+    return @[]
+
   let totalPkgs = state.soa.locators.len
 
   if cleanQuery.len == 0:
@@ -138,11 +141,22 @@ proc switchToSystem*(state: var AppState, mode: SearchMode) =
     state.cursor = 0
     state.scroll = 0
     state.selectionBits.setLen(0)
-    loadFromDB(state, SourceSystem)
-    if not state.systemDB.isLoaded:
-      requestLoadAll(state.searchId)
+
+    if mode == ModeLocal:
+      loadFromDB(state, SourceSystem)
+      if not state.systemDB.isLoaded:
+        requestLoadAll(state.searchId)
+      else:
+        state.visibleIndices = filterIndices(state, state.searchBuffer)
     else:
-      state.visibleIndices = filterIndices(state, state.searchBuffer)
+      # ModeAUR: Clear current data to prepare for search results
+      state.soa.locators.setLen(0)
+      state.soa.nameLens.setLen(0)
+      state.soa.verLens.setLen(0)
+      state.soa.repoIndices.setLen(0)
+      state.soa.flags.setLen(0)
+      state.textArena.setLen(0)
+      state.repos.setLen(0)
 
 proc restoreBaseState*(state: var AppState) =
   if state.baseDataSource == SourceNimble:
@@ -184,14 +198,15 @@ proc newState*(
     baseSearchMode: initialMode,
     baseDataSource: ds,
     isSearching: false,
-    showDetails: initialShowDetails,
-    detailScroll: 0,
-    viewingSelection: false,
-    inputMode: if useVim: ModeVimNormal else: ModeStandard,
     searchId: 1,
+    dataSearchId: 0,
     lastInputTime: getMonoTime(),
     debouncePending: false,
     statusMessage: "",
+    # FIX: Assign initial values correctly
+    showDetails: initialShowDetails,
+    needsRedraw: true,
+    detailScroll: 0,
   )
 
 func toggleSelectionAtCursor*(state: var AppState) =
