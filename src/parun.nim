@@ -1,4 +1,4 @@
-import std/[terminal, os, selectors, posix, strutils, parseopt, sets, tables]
+import std/[terminal, os, selectors, posix, strutils, parseopt, tables, bitops]
 import types, core, tui, pkgManager, terminal as term, state, keyboard
 
 proc main() =
@@ -15,9 +15,9 @@ proc main() =
       case key
       of "noinfo", "n":
         startShowDetails = false
-      of "vim":
+      of "vim", "v":
         useVim = true
-      of "nimble":
+      of "nimble", "nim":
         startNimble = true
       else:
         discard
@@ -48,31 +48,45 @@ proc main() =
   while not appState.shouldQuit:
     if appState.shouldInstall or appState.shouldUninstall:
       var targets: seq[string] = @[]
-      if appState.selected.len > 0:
-        for s in appState.selected:
-          if appState.shouldInstall:
-            if appState.dataSource == SourceNimble:
-              if s.contains('/'):
-                targets.add(s.split('/')[1])
-              else:
-                targets.add(s)
-            else:
-              targets.add(s)
-          else:
-            if s.contains('/'):
-              targets.add(s.split('/')[1])
-            else:
-              targets.add(s)
+      let selCount = appState.getSelectedCount()
+      let totalPkgs = appState.soa.locators.len
+
+      if selCount > 0:
+        for i, word in appState.selectionBits:
+          if word == 0:
+            continue
+          for bit in 0 .. 63:
+            if testBit(word, bit):
+              let realIdx = i * 64 + bit
+              if realIdx < totalPkgs:
+                let s =
+                  if appState.dataSource == SourceNimble:
+                    appState.getName(realIdx)
+                  else:
+                    appState.getRepo(realIdx) & "/" & appState.getName(realIdx)
+
+                if appState.shouldInstall:
+                  if appState.dataSource == SourceNimble:
+                    if s.contains('/'):
+                      targets.add(s.split('/')[1])
+                    else:
+                      targets.add(s)
+                  else:
+                    targets.add(s)
+                else:
+                  if s.contains('/'):
+                    targets.add(s.split('/')[1])
+                  else:
+                    targets.add(s)
       elif appState.visibleIndices.len > 0:
-        let idx = appState.visibleIndices[appState.cursor]
-        let p = appState.pkgs[int(idx)]
+        let idx = int(appState.visibleIndices[appState.cursor])
         if appState.shouldInstall:
           if appState.dataSource == SourceNimble:
-            targets.add(appState.getName(p))
+            targets.add(appState.getName(idx))
           else:
-            targets.add(appState.getRepo(p) & "/" & appState.getName(p))
+            targets.add(appState.getRepo(idx) & "/" & appState.getName(idx))
         else:
-          targets.add(appState.getName(p))
+          targets.add(appState.getName(idx))
 
       if targets.len > 0:
         restoreTerminal(origTerm)
@@ -106,11 +120,10 @@ proc main() =
 
       if appState.showDetails and appState.visibleIndices.len > 0:
         let idx = appState.visibleIndices[appState.cursor]
-        let id = appState.getPkgId(idx)
-        if not appState.detailsCache.hasKey(id):
-          let p = appState.pkgs[int(idx)]
+        if not appState.detailsCache.hasKey(idx):
+          let i = int(idx)
           requestDetails(
-            id, appState.getName(p), appState.getRepo(p), appState.dataSource
+            idx, appState.getName(i), appState.getRepo(i), appState.dataSource
           )
 
     let ready = selector.select(20)
