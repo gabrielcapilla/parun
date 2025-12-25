@@ -123,7 +123,7 @@ func handleVimCommand(state: var AppState, k: char) =
 
 func handleVimNormal(state: var AppState, k: char, listHeight: int) =
   case k
-  of 'j', KeyDown:
+  of 'j', KeyDown, KeyCtrlJ:
     if state.visibleIndices.len > 0:
       state.cursor = max(0, state.cursor - 1)
       state.detailScroll = 0
@@ -153,9 +153,9 @@ func handleVimNormal(state: var AppState, k: char, listHeight: int) =
     state.detailScroll = max(0, state.detailScroll - 1)
   of KeyCtrlE:
     if state.visibleIndices.len > 0:
-      let id = state.getPkgId(state.visibleIndices[state.cursor])
-      if state.detailsCache.hasKey(id):
-        let lines = state.detailsCache[id].countLines()
+      let idx = state.visibleIndices[state.cursor]
+      if state.detailsCache.hasKey(idx):
+        let lines = state.detailsCache[idx].countLines()
         if state.detailScroll < lines - 1:
           state.detailScroll.inc()
   of 'i':
@@ -169,7 +169,7 @@ func handleVimNormal(state: var AppState, k: char, listHeight: int) =
     state.commandBuffer = ""
     state.inputMode = ModeVimCommand
   of KeySpace:
-    toggleSelection(state)
+    toggleSelectionAtCursor(state)
   of 'x':
     state.shouldUninstall = true
   of KeyEnter:
@@ -210,7 +210,7 @@ proc handleVimInsert(state: var AppState, k: char, listHeight: int) =
   of KeyCtrlRight:
     moveCursorWordRight(state)
   of KeyTab:
-    toggleSelection(state)
+    toggleSelectionAtCursor(state)
   of KeyEnter:
     state.shouldInstall = true
   of KeyCtrlR:
@@ -225,7 +225,7 @@ func handleStandard(state: var AppState, k: char, listHeight: int) =
     if state.visibleIndices.len > 0:
       state.cursor = min(state.visibleIndices.len - 1, state.cursor + 1)
       state.detailScroll = 0
-  of KeyDown:
+  of KeyDown, KeyCtrlJ:
     if state.visibleIndices.len > 0:
       state.cursor = max(0, state.cursor - 1)
       state.detailScroll = 0
@@ -258,7 +258,7 @@ func handleStandard(state: var AppState, k: char, listHeight: int) =
   of KeyCtrlRight:
     moveCursorWordRight(state)
   of KeyTab:
-    toggleSelection(state)
+    toggleSelectionAtCursor(state)
   of KeyEnter:
     state.shouldInstall = true
   of KeyCtrlR:
