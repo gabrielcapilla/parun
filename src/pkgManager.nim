@@ -15,7 +15,8 @@ type
 
   WorkerReq = object
     kind: WorkerReqKind
-    query, pkgId, pkgName, pkgRepo: string
+    query, pkgName, pkgRepo: string
+    pkgIdx: int32
     searchId: int
     source: DataSource
 
@@ -128,7 +129,7 @@ proc workerLoop(toolType: PkgManagerType) {.thread.} =
           i += line.skipWhitespace(i)
           i += line.parseUntil(ver, ' ', i)
 
-          if bb.textBlock.len + name.len + ver.len > BlockSize or counter >= 1000:
+          if bb.textChunk.len + name.len + ver.len > BatchSize or counter >= 1000:
             flushBatch(bb, resChan, req.searchId, tStart)
             counter = 0
             let (hasNew, newReq) = reqChan.tryRecv()
@@ -204,7 +205,7 @@ proc workerLoop(toolType: PkgManagerType) {.thread.} =
             if name.len > 0:
               if url.len > 0:
                 nimbleMetaCache[name] = (url: url, tags: tags)
-              if bb.textBlock.len + name.len + 10 > BlockSize or counter >= 500:
+              if bb.textChunk.len + name.len + 10 > BatchSize or counter >= 500:
                 flushBatch(bb, resChan, req.searchId, tStart)
                 counter = 0
                 let (hasNew, newReq) = reqChan.tryRecv()
@@ -248,7 +249,7 @@ proc workerLoop(toolType: PkgManagerType) {.thread.} =
               name = s[1]
             i += line.skipWhitespace(i)
             i += line.parseUntil(ver, ' ', i)
-            if bb.textBlock.len + name.len + ver.len > BlockSize:
+            if bb.textChunk.len + name.len + ver.len > BatchSize:
               flushBatch(bb, resChan, req.searchId, tStart)
             bb.addPackage(
               name,
@@ -274,7 +275,7 @@ proc workerLoop(toolType: PkgManagerType) {.thread.} =
               name = s[1]
             i += line.skipWhitespace(i)
             i += line.parseUntil(ver, ' ', i)
-            if bb.textBlock.len + name.len + ver.len > BlockSize:
+            if bb.textChunk.len + name.len + ver.len > BatchSize:
               flushBatch(bb, resChan, req.searchId, tStart)
             bb.addPackage(
               name,
@@ -314,13 +315,15 @@ proc workerLoop(toolType: PkgManagerType) {.thread.} =
 
           if fetched:
             resChan.send(
-              Msg(kind: MsgDetailsLoaded, pkgId: req.pkgId, content: content)
+              Msg(kind: MsgDetailsLoaded, pkgIdx: req.pkgIdx, content: content)
             )
           else:
             let (c, _) = execCmdEx("nimble search " & req.pkgName)
             resChan.send(
               Msg(
-                kind: MsgDetailsLoaded, pkgId: req.pkgId, content: formatFallbackInfo(c)
+                kind: MsgDetailsLoaded,
+                pkgIdx: req.pkgIdx,
+                content: formatFallbackInfo(c),
               )
             )
         else:
@@ -337,7 +340,7 @@ proc workerLoop(toolType: PkgManagerType) {.thread.} =
             else:
               @["-Si", target]
           let (c, _) = execCmdEx(bin & " " & args.join(" "))
-          resChan.send(Msg(kind: MsgDetailsLoaded, pkgId: req.pkgId, content: c))
+          resChan.send(Msg(kind: MsgDetailsLoaded, pkgIdx: req.pkgIdx, content: c))
     except Exception as e:
       resChan.send(Msg(kind: MsgError, errMsg: e.msg))
 
@@ -369,9 +372,11 @@ proc requestLoadNimble*(id: int) =
 proc requestSearch*(query: string, id: int) =
   reqChan.send(WorkerReq(kind: ReqSearch, query: query, searchId: id))
 
-proc requestDetails*(id, name, repo: string, source: DataSource) =
+proc requestDetails*(idx: int32, name, repo: string, source: DataSource) =
   reqChan.send(
-    WorkerReq(kind: ReqDetails, pkgId: id, pkgName: name, pkgRepo: repo, source: source)
+    WorkerReq(
+      kind: ReqDetails, pkgIdx: idx, pkgName: name, pkgRepo: repo, source: source
+    )
   )
 
 proc pollWorkerMessages*(): seq[Msg] =
