@@ -1,4 +1,4 @@
-import std/[strformat, strutils, sets, tables]
+import std/[strformat, strutils, tables]
 import types, utils, state
 
 const
@@ -12,9 +12,9 @@ const
   BoxVer = "│"
   ColorFrame = "\e[90m"
   Reset = "\e[0m"
-  CursorPrefixSel = "\e[93m* "
-  CursorPrefixUnsel = "\e[93m*\e[0m "
-  NormalPrefix = "  "
+
+  PrefixLUT = ["  ", "\e[93m*\e[0m ", "\e[48;5;235m  ", "\e[48;5;235m\e[93m* "]
+
   SepSlash = "/"
   Space = " "
   InstalledTag = " \e[36m[installed]\e[0m"
@@ -31,12 +31,14 @@ func appendRow(
     width: int,
     isCursor, isSelected: bool,
 ) =
-  let p = state.pkgs[int(idx)]
-  let tagW = if p.isInstalled: InstalledLen else: 0
+  let i = int(idx)
+  let isInstalled = state.soa.flags[i].isInstalled
+  let tagW = if isInstalled: InstalledLen else: 0
   let maxTextW = max(0, width - PrefixLen - tagW)
-  var dRepo = state.getRepo(p)
-  var dName = state.getName(p)
-  var dVer = state.getVersion(p)
+
+  var dRepo = state.getRepo(i)
+  var dName = state.getName(i)
+  var dVer = state.getVersion(i)
 
   let currentLen = dRepo.len + 1 + dName.len + 1 + dVer.len
   if currentLen > maxTextW:
@@ -57,14 +59,11 @@ func appendRow(
         dName = ""
         dRepo = dRepo[0 ..< min(dRepo.len, maxTextW)]
 
-  if isCursor:
-    buffer.add(ColorHighlightBg)
-  if isSelected:
-    buffer.add(if isCursor: CursorPrefixSel else: CursorPrefixUnsel)
-  else:
-    buffer.add(NormalPrefix)
+  let styleIdx = (isCursor.int shl 1) or isSelected.int
 
-  if isCursor or isSelected:
+  buffer.add(PrefixLUT[styleIdx])
+
+  if isCursor:
     buffer.add(dRepo)
     if dName.len > 0:
       buffer.add(SepSlash)
@@ -88,8 +87,9 @@ func appendRow(
       buffer.add(dVer)
       buffer.add(Reset)
 
-  if p.isInstalled:
+  if isInstalled:
     buffer.add(InstalledTag)
+
   let usedLen =
     PrefixLen + dRepo.len + (if dName.len > 0: 1 + dName.len else: 0) +
     (if dVer.len > 0: 1 + dVer.len else: 0) + tagW
@@ -102,6 +102,7 @@ func appendRow(
       p -= 50
     if p > 0:
       buffer.add(Spaces50[0 ..< p])
+
   if isCursor:
     buffer.add(Reset)
 
@@ -120,9 +121,8 @@ func renderDetails(buffer: var string, state: AppState, r, listH, detailTextW: i
     var textContent = ""
     if state.visibleIndices.len > 0:
       let curIdx = state.visibleIndices[state.cursor]
-      let pId = state.getPkgId(curIdx)
-      if state.detailsCache.hasKey(pId):
-        let dLines = state.detailsCache[pId].splitLines
+      if state.detailsCache.hasKey(curIdx):
+        let dLines = state.detailsCache[curIdx].splitLines
         let effectiveIdx = contentRowIndex + state.detailScroll
         if effectiveIdx < dLines.len:
           textContent = dLines[effectiveIdx].replace("\t", "  ")
@@ -139,13 +139,15 @@ func renderDetails(buffer: var string, state: AppState, r, listH, detailTextW: i
 
 func renderStatusBar(buffer: var string, state: AppState, termW: int): int =
   let pkgCountStr =
-    if state.pkgs.len == 0:
+    if state.soa.locators.len == 0:
       fmt"{AnsiDim}(...){AnsiReset}"
     else:
-      fmt"{AnsiDim}({state.visibleIndices.len}/{state.pkgs.len}){AnsiReset}"
+      fmt"{AnsiDim}({state.visibleIndices.len}/{state.soa.locators.len}){AnsiReset}"
+
+  let selCount = state.getSelectedCount()
   let statusPrefix =
-    if state.selected.len > 0:
-      fmt"{ColorSel}[{state.selected.len}]{AnsiReset} "
+    if selCount > 0:
+      fmt"{ColorSel}[{selCount}]{AnsiReset} "
     else:
       ""
 
@@ -223,7 +225,7 @@ func renderUi*(state: AppState, buffer: var string, termH, termW: int): RenderRe
         realIdx,
         listW,
         rowIdx == state.cursor,
-        state.getPkgId(realIdx) in state.selected,
+        state.isSelected(int(realIdx)),
       )
     else:
       buffer.add(repeat(" ", listW))
