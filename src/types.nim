@@ -55,7 +55,7 @@ const
   ColorHighlightBg* = "\e[48;5;235m"
 
   ColorModeLocal* = "\e[1;32m"
-  ColorModeHybrid* = "\e[1;35m"
+  ColorModeAur* = "\e[1;35m"
   ColorModeNimble* = "\e[1;33m"
   ColorModeReview* = "\e[1;33m"
   ColorVimNormal* = "\e[1;44;97m"
@@ -73,7 +73,6 @@ type
 
   SearchMode* = enum
     ModeLocal
-    ModeHybrid
 
   DataSource* = enum
     SourceSystem
