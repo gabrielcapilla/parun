@@ -138,8 +138,10 @@ proc getKeyAsync*(): char =
     keyValue = KeyNull
   elif b1 == 27:
     keyValue = parseSpecialKeySequence()
-  elif b1 == 10 or b1 == 13:
+  elif b1 == 13:
     keyValue = KeyEnter
+  elif b1 == 10:
+    keyValue = KeyCtrlJ
   elif b1 == 127 or b1 == 8:
     keyValue = KeyBackspace
   elif b1 == 9:
