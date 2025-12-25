@@ -35,39 +35,31 @@ type
     sudo*: bool
     supportsAur*: bool
 
-const Tools*: array[PkgManagerType, ToolDef] = [
-  ManPacman: ToolDef(
-    bin: "pacman",
+func createPacmanToolDef(binName: string, withSudo: bool): ToolDef =
+  ToolDef(
+    bin: binName,
     installCmd: " -S ",
     uninstallCmd: " -R ",
     searchCmd: " -Ss ",
-    sudo: true,
+    sudo: withSudo,
     supportsAur: false,
-  ),
-  ManParu: ToolDef(
-    bin: "paru",
-    installCmd: " -S ",
-    uninstallCmd: " -R ",
-    searchCmd: " -Ss ",
-    sudo: false,
-    supportsAur: true,
-  ),
-  ManYay: ToolDef(
-    bin: "yay",
-    installCmd: " -S ",
-    uninstallCmd: " -R ",
-    searchCmd: " -Ss ",
-    sudo: false,
-    supportsAur: true,
-  ),
-  ManNimble: ToolDef(
+  )
+
+func createNimbleToolDef(): ToolDef =
+  ToolDef(
     bin: "nimble",
     installCmd: " install ",
     uninstallCmd: " uninstall ",
     searchCmd: " search ",
     sudo: false,
     supportsAur: false,
-  ),
+  )
+
+const Tools*: array[PkgManagerType, ToolDef] = [
+  ManPacman: createPacmanToolDef("pacman", true),
+  ManParu: createPacmanToolDef("paru", false),
+  ManYay: createPacmanToolDef("yay", false),
+  ManNimble: createNimbleToolDef(),
 ]
 
 var
@@ -231,10 +223,12 @@ proc workerLoop(toolType: PkgManagerType) {.thread.} =
           flushBatch(bb, resChan, req.searchId, tStart)
       of ReqSearch:
         let tStart = getMonoTime()
-        if toolDef.supportsAur and req.query.len > 2:
+
+        if req.query.startsWith("aur/"):
+          let actualQuery = req.query[4 .. ^1]
           let p = startProcess(
             toolDef.bin,
-            args = ["-Ss", "--aur", "--color", "never", req.query],
+            args = ["-Ss", "--aur", "--color", "never", actualQuery],
             options = {poUsePath},
           )
           let outLines = p.outputStream.readAll().splitLines()
@@ -242,6 +236,32 @@ proc workerLoop(toolType: PkgManagerType) {.thread.} =
           var bb = initBatchBuilder()
           for line in outLines:
             if line.len == 0 or line.startsWith("    "):
+              continue
+            var i = 0
+            var fullId, ver: string
+            i += line.parseUntil(fullId, ' ', i)
+            var repo = "AUR"
+            var name = fullId
+            if '/' in fullId:
+              let s = fullId.split('/', 1)
+              repo = s[0]
+              name = s[1]
+            i += line.skipWhitespace(i)
+            i += line.parseUntil(ver, ' ', i)
+            if bb.textBlock.len + name.len + ver.len > BlockSize:
+              flushBatch(bb, resChan, req.searchId, tStart)
+            bb.addPackage(
+              name,
+              ver,
+              repo,
+              line.contains("[installed]") or line.contains("[instalado]"),
+            )
+          flushBatch(bb, resChan, req.searchId, tStart)
+        else:
+          let (outp, _) = execCmdEx(toolDef.bin & toolDef.searchCmd & req.query)
+          var bb = initBatchBuilder()
+          for line in outp.splitLines:
+            if line.len == 0:
               continue
             var i = 0
             var fullId, ver: string
