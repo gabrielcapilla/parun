@@ -85,22 +85,32 @@ proc update*(state: AppState, msg: Msg, listHeight: int): AppState =
         else:
           repoMap[i] = uint8(found)
 
-      let blockIdx = uint16(result.textBlocks.len)
-      result.textBlocks.add(msg.textBlock)
-      for p in msg.pkgs:
-        var newP = p
-        newP.blockIdx = blockIdx
-        newP.repoIdx = repoMap[p.repoIdx]
-        result.pkgs.add(newP)
+      let baseOffset = uint32(result.textArena.len)
+
+      for c in msg.textChunk:
+        result.textArena.add(c)
+
+      for i in 0 ..< msg.soa.locators.len:
+        let absLoc = baseOffset + msg.soa.locators[i]
+
+        result.soa.locators.add(absLoc)
+        result.soa.nameLens.add(msg.soa.nameLens[i])
+        result.soa.verLens.add(msg.soa.verLens[i])
+        result.soa.repoIndices.add(repoMap[msg.soa.repoIndices[i]])
+        result.soa.flags.add(msg.soa.flags[i])
+
+      let requiredWords = (result.soa.locators.len + 63) div 64
+      if result.selectionBits.len < requiredWords:
+        result.selectionBits.setLen(requiredWords)
 
       if result.dataSource == SourceSystem and result.searchMode == ModeLocal:
-        result.systemDB.pkgs = result.pkgs
-        result.systemDB.textBlocks = result.textBlocks
+        result.systemDB.soa = result.soa
+        result.systemDB.textArena = result.textArena
         result.systemDB.repos = result.repos
         result.systemDB.isLoaded = true
       elif result.dataSource == SourceNimble:
-        result.nimbleDB.pkgs = result.pkgs
-        result.nimbleDB.textBlocks = result.textBlocks
+        result.nimbleDB.soa = result.soa
+        result.nimbleDB.textArena = result.textArena
         result.nimbleDB.repos = result.repos
         result.nimbleDB.isLoaded = true
 
@@ -119,17 +129,27 @@ proc update*(state: AppState, msg: Msg, listHeight: int): AppState =
         if result.dataSource == SourceNimble and result.searchBuffer.len > 0:
           result.statusMessage = "No results in Nimble"
     else:
-      result.pkgs = msg.pkgs
-      result.textBlocks = @[msg.textBlock]
+      result.soa = msg.soa
+
+      result.textArena = newSeqOfCap[char](msg.textChunk.len)
+      for c in msg.textChunk:
+        result.textArena.add(c)
+
       result.repos = msg.repos
+
+      result.selectionBits.setLen((result.soa.locators.len + 63) div 64)
+      for i in 0 ..< result.selectionBits.len:
+        result.selectionBits[i] = 0
+      result.detailsCache.clear()
+
       if result.dataSource == SourceSystem and result.searchMode == ModeLocal:
-        result.systemDB.pkgs = result.pkgs
-        result.systemDB.textBlocks = result.textBlocks
+        result.systemDB.soa = result.soa
+        result.systemDB.textArena = result.textArena
         result.systemDB.repos = result.repos
         result.systemDB.isLoaded = true
       elif result.dataSource == SourceNimble:
-        result.nimbleDB.pkgs = result.pkgs
-        result.nimbleDB.textBlocks = result.textBlocks
+        result.nimbleDB.soa = result.soa
+        result.nimbleDB.textArena = result.textArena
         result.nimbleDB.repos = result.repos
         result.nimbleDB.isLoaded = true
 
@@ -146,7 +166,7 @@ proc update*(state: AppState, msg: Msg, listHeight: int): AppState =
   of MsgDetailsLoaded:
     if result.detailsCache.len >= DetailsCacheLimit:
       result.detailsCache.clear()
-    result.detailsCache[msg.pkgId] = msg.content
+    result.detailsCache[msg.pkgIdx] = msg.content
   of MsgError:
     result.searchBuffer = "Error: " & msg.errMsg
     result.isSearching = false
