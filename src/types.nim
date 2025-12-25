@@ -1,8 +1,8 @@
-import std/[sets, tables, monotimes]
+import std/[tables, monotimes]
 
 const
   DetailsCacheLimit* = 16
-  BlockSize* = 64 * 1024
+  BatchSize* = 64 * 1024
 
   KeyNull* = char(0)
   KeyCtrlA* = char(1)
@@ -13,6 +13,7 @@ const
   KeyCtrlF* = char(6)
   KeyBackspace* = char(8)
   KeyTab* = char(9)
+  KeyCtrlJ* = char(10)
   KeyEnter* = char(13)
   KeyCtrlN* = char(14)
   KeyCtrlR* = char(18)
@@ -63,14 +64,6 @@ const
   ColorVimCommand* = "\e[1;41;97m"
 
 type
-  PackedPackage* = object
-    blockIdx*: uint16
-    offset*: uint16
-    repoIdx*: uint8
-    nameLen*: uint8
-    verLen*: uint8
-    flags*: uint8
-
   SearchMode* = enum
     ModeLocal
 
@@ -92,6 +85,13 @@ type
     MsgDetailsLoaded
     MsgError
 
+  PackageSOA* = object
+    locators*: seq[uint32]
+    nameLens*: seq[uint8]
+    verLens*: seq[uint8]
+    repoIndices*: seq[uint8]
+    flags*: seq[uint8]
+
   Msg* = object
     case kind*: MsgKind
     of MsgInput:
@@ -101,35 +101,35 @@ type
     of MsgTick:
       discard
     of MsgSearchResults:
-      pkgs*: seq[PackedPackage]
-      textBlock*: string
+      soa*: PackageSOA
+      textChunk*: string
       repos*: seq[string]
       searchId*: int
       isAppend*: bool
       durationMs*: int
     of MsgDetailsLoaded:
-      pkgId*: string
+      pkgIdx*: int32
       content*: string
     of MsgError:
       errMsg*: string
 
   PackageDB* = object
-    pkgs*: seq[PackedPackage]
-    textBlocks*: seq[string]
+    soa*: PackageSOA
+    textArena*: seq[char]
     repos*: seq[string]
     isLoaded*: bool
 
   AppState* = object
-    pkgs*: seq[PackedPackage]
-    textBlocks*: seq[string]
+    soa*: PackageSOA
+    textArena*: seq[char]
     repos*: seq[string]
 
     systemDB*: PackageDB
     nimbleDB*: PackageDB
 
     visibleIndices*: seq[int32]
-    selected*: HashSet[string]
-    detailsCache*: Table[string, string]
+    selectionBits*: seq[uint64]
+    detailsCache*: Table[int32, string]
 
     cursor*: int
     scroll*: int
@@ -161,5 +161,5 @@ type
     lastInputTime*: MonoTime
     debouncePending*: bool
 
-func isInstalled*(p: PackedPackage): bool {.inline.} =
-  (p.flags and 1) != 0
+func isInstalled*(flags: uint8): bool {.inline.} =
+  (flags and 1) != 0
