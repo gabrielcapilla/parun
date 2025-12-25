@@ -31,15 +31,17 @@ proc processInput*(state: var AppState, k: char, listHeight: int) =
       state.debouncePending = false
     elif isAurQuery:
       if state.dataSource != SourceSystem:
-        switchToSystem(state, ModeLocal)
+        switchToSystem(state, ModeAUR)
       else:
-        state.searchMode = ModeLocal
+        if state.searchMode != ModeAUR:
+          switchToSystem(state, ModeAUR)
       state.debouncePending = true
     else:
       if state.dataSource != state.baseDataSource:
         restoreBaseState(state)
       elif state.dataSource == SourceSystem and state.searchMode != state.baseSearchMode:
         restoreBaseState(state)
+
       state.visibleIndices = filterIndices(state, state.searchBuffer)
       state.debouncePending = false
       state.statusMessage = ""
@@ -58,11 +60,17 @@ proc update*(state: AppState, msg: Msg, listHeight: int): AppState =
       if (getMonoTime() - result.lastInputTime).inMilliseconds > 500:
         result.debouncePending = false
         let effectiveQuery = getEffectiveQuery(result.searchBuffer)
+
         if effectiveQuery.len > 1:
           result.searchId.inc()
           result.isSearching = true
           result.statusMessage = "Searching AUR..."
-          requestSearch(effectiveQuery, result.searchId)
+
+          var queryToSend = effectiveQuery
+          if result.searchMode == ModeAUR:
+            queryToSend = "aur/" & effectiveQuery
+
+          requestSearch(queryToSend, result.searchId)
         else:
           result.visibleIndices = @[]
           result.statusMessage = "Type to search AUR..."
@@ -72,6 +80,18 @@ proc update*(state: AppState, msg: Msg, listHeight: int): AppState =
     result.statusMessage = ""
 
     if msg.isAppend:
+      if result.dataSearchId != msg.searchId:
+        result.soa.locators.setLen(0)
+        result.soa.nameLens.setLen(0)
+        result.soa.verLens.setLen(0)
+        result.soa.repoIndices.setLen(0)
+        result.soa.flags.setLen(0)
+        result.textArena.setLen(0)
+        result.repos.setLen(0)
+        result.selectionBits.setLen(0)
+        result.detailsCache.clear()
+        result.dataSearchId = msg.searchId
+
       var repoMap = newSeq[uint8](msg.repos.len)
       for i, r in msg.repos:
         var found = -1
@@ -86,7 +106,6 @@ proc update*(state: AppState, msg: Msg, listHeight: int): AppState =
           repoMap[i] = uint8(found)
 
       let baseOffset = uint32(result.textArena.len)
-
       for c in msg.textChunk:
         result.textArena.add(c)
 
@@ -130,12 +149,12 @@ proc update*(state: AppState, msg: Msg, listHeight: int): AppState =
           result.statusMessage = "No results in Nimble"
     else:
       result.soa = msg.soa
-
       result.textArena = newSeqOfCap[char](msg.textChunk.len)
       for c in msg.textChunk:
         result.textArena.add(c)
 
       result.repos = msg.repos
+      result.dataSearchId = msg.searchId
 
       result.selectionBits.setLen((result.soa.locators.len + 63) div 64)
       for i in 0 ..< result.selectionBits.len:
