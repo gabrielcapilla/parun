@@ -161,9 +161,10 @@ func renderStatusBar(buffer: var string, state: AppState, termW: int): int =
   elif state.inputMode == ModeVimInsert:
     modeStr = fmt"{ColorVimInsert} INSERT {AnsiReset}"
   elif state.searchMode == ModeLocal:
-    modeStr = fmt"{ColorModeLocal}[Local]{AnsiReset}"
-  else:
-    modeStr = fmt"{ColorModeHybrid}[Local+AUR]{AnsiReset}"
+    if state.searchBuffer.startsWith("aur/"):
+      modeStr = fmt"{ColorModeAur}[AUR]{AnsiReset}"
+    else:
+      modeStr = fmt"{ColorModeLocal}[Local]{AnsiReset}"
 
   if state.statusMessage.len > 0:
     modeStr.add(fmt" {AnsiBold}{state.statusMessage}{AnsiReset}")
