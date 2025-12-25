@@ -13,8 +13,6 @@ proc main() =
     case kind
     of cmdLongOption, cmdShortOption:
       case key
-      of "aur", "a":
-        startMode = ModeHybrid
       of "noinfo", "n":
         startShowDetails = false
       of "vim":
@@ -141,7 +139,7 @@ proc main() =
             if appState.dataSource == SourceSystem:
               let hasAurPrefix = appState.searchBuffer.startsWith("aur/")
               let effectiveQuery = getEffectiveQuery(appState.searchBuffer)
-              let active = (appState.searchMode == ModeHybrid) or hasAurPrefix
+              let active = hasAurPrefix
               if active and effectiveQuery.len > 2:
                 appState.searchId.inc()
                 requestSearch(effectiveQuery, appState.searchId)
