@@ -75,9 +75,6 @@ proc filterIndices*(state: AppState, query: string, results: var seq[int32]) =
   let effective = getEffectiveQuery(query)
   let cleanQuery = effective.strip()
 
-  if state.searchMode == ModeAUR and cleanQuery.len == 0:
-    return
-
   let totalPkgs = state.soa.locators.len
 
   if cleanQuery.len == 0:
@@ -150,6 +147,11 @@ proc saveCurrentToDB*(state: var AppState) =
       state.systemDB.textArena = state.textArena
       state.systemDB.repos = state.repos
       state.systemDB.isLoaded = true
+    else:
+      state.aurDB.soa = state.soa
+      state.aurDB.textArena = state.textArena
+      state.aurDB.repos = state.repos
+      state.aurDB.isLoaded = true
   else:
     state.nimbleDB.soa = state.soa
     state.nimbleDB.textArena = state.textArena
@@ -158,9 +160,14 @@ proc saveCurrentToDB*(state: var AppState) =
 
 proc loadFromDB*(state: var AppState, source: DataSource) =
   if source == SourceSystem:
-    state.soa = state.systemDB.soa
-    state.textArena = state.systemDB.textArena
-    state.repos = state.systemDB.repos
+    if state.searchMode == ModeLocal:
+      state.soa = state.systemDB.soa
+      state.textArena = state.systemDB.textArena
+      state.repos = state.systemDB.repos
+    else:
+      state.soa = state.aurDB.soa
+      state.textArena = state.aurDB.textArena
+      state.repos = state.aurDB.repos
   else:
     state.soa = state.nimbleDB.soa
     state.textArena = state.nimbleDB.textArena
@@ -192,20 +199,18 @@ proc switchToSystem*(state: var AppState, mode: SearchMode) =
     state.scroll = 0
     state.selectionBits.setLen(0)
 
+    loadFromDB(state, SourceSystem)
+
     if mode == ModeLocal:
-      loadFromDB(state, SourceSystem)
       if not state.systemDB.isLoaded:
         requestLoadAll(state.searchId)
       else:
         filterIndices(state, state.searchBuffer, state.visibleIndices)
     else:
-      state.soa.locators.setLen(0)
-      state.soa.nameLens.setLen(0)
-      state.soa.verLens.setLen(0)
-      state.soa.repoIndices.setLen(0)
-      state.soa.flags.setLen(0)
-      state.textArena.setLen(0)
-      state.repos.setLen(0)
+      if not state.aurDB.isLoaded:
+        requestLoadAur(state.searchId)
+      else:
+        filterIndices(state, state.searchBuffer, state.visibleIndices)
 
 proc restoreBaseState*(state: var AppState) =
   if state.baseDataSource == SourceNimble:
@@ -234,6 +239,7 @@ proc newState*(
     textArena: @[],
     repos: @[],
     systemDB: initPackageDB(),
+    aurDB: initPackageDB(),
     nimbleDB: initPackageDB(),
     visibleIndices: @[],
     selectionBits: @[],

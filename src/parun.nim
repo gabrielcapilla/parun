@@ -16,6 +16,8 @@ proc main() =
         startShowDetails = false
       of "nimble", "nim":
         startNimble = true
+      of "aur":
+        startMode = ModeAUR
       else:
         discard
     else:
@@ -30,6 +32,8 @@ proc main() =
     requestLoadNimble(appState.searchId)
   else:
     requestLoadAll(appState.searchId)
+    if startMode == ModeAUR:
+      requestLoadAur(appState.searchId)
 
   let selector = newSelector[int]()
   selector.registerHandle(STDIN_FILENO, {Event.Read}, 0)
@@ -131,20 +135,6 @@ proc main() =
 
           if appState.shouldQuit:
             break
-
-          let isEditing =
-            (k.ord >= 32 and k.ord <= 126) or k == KeyBack or k == KeyBackspace
-          let isToggle = (k == KeyCtrlA)
-          let shouldCheckNetwork = isEditing or isToggle
-
-          if shouldCheckNetwork and not appState.viewingSelection:
-            if appState.dataSource == SourceSystem:
-              let hasAurPrefix = appState.searchBuffer.startsWith("aur/")
-              let effectiveQuery = getEffectiveQuery(appState.searchBuffer)
-              let active = hasAurPrefix
-              if active and effectiveQuery.len > 2:
-                appState.searchId.inc()
-                requestSearch(effectiveQuery, appState.searchId)
 
     for msg in pollWorkerMessages():
       let listH = max(1, terminalHeight() - 2)

@@ -1,7 +1,7 @@
 import
   std/[
     os, osproc, strutils, strformat, tables, streams, sets, parsejson, monotimes,
-    httpclient, net, parseutils,
+    httpclient, net, parseutils, times,
   ]
 import types, batcher, nUtils, pUtils
 
@@ -9,6 +9,7 @@ type
   WorkerReqKind = enum
     ReqLoadAll
     ReqLoadNimble
+    ReqLoadAur
     ReqSearch
     ReqDetails
     ReqStop
@@ -222,63 +223,112 @@ proc workerLoop(toolType: PkgManagerType) {.thread.} =
         fs.close()
         if not interrupted:
           flushBatch(bb, resChan, req.searchId, tStart)
-      of ReqSearch:
+      of ReqLoadAur:
         let tStart = getMonoTime()
+        let cacheDir = getHomeDir() / ".cache/parun"
+        createDir(cacheDir)
+        let metaPath = cacheDir / "packages-meta-v1.json.gz"
+        let url = "https://aur.archlinux.org/packages-meta-v1.json.gz"
+
+        var needDownload = true
+        if fileExists(metaPath):
+          let info = getFileInfo(metaPath)
+          if (getTime() - info.lastWriteTime).inHours < 24:
+            needDownload = false
+
+        if needDownload:
+          if execCmd("curl -s -L -o " & metaPath & " " & url) != 0:
+            resChan.send(Msg(kind: MsgError, errMsg: "Failed to download AUR metadata"))
+            continue
 
         let (instOut, _) = execCmdEx("pacman -Q")
         let instMap = parseInstalledPackages(instOut)
 
-        if req.query.startsWith("aur/"):
-          let actualQuery = req.query[4 .. ^1]
-          let p = startProcess(
-            toolDef.bin,
-            args = ["-Ss", "--aur", "--color", "never", actualQuery],
-            options = {poUsePath},
-          )
-          let outLines = p.outputStream.readAll().splitLines()
-          p.close()
-          var bb = initBatchBuilder()
-          for line in outLines:
-            if line.len == 0 or line.startsWith("    "):
-              continue
-            var i = 0
-            var fullId, ver: string
-            i += line.parseUntil(fullId, ' ', i)
-            var repo = "AUR"
-            var name = fullId
-            if '/' in fullId:
-              let s = fullId.split('/', 1)
-              repo = s[0]
-              name = s[1]
-            i += line.skipWhitespace(i)
-            i += line.parseUntil(ver, ' ', i)
-            if bb.textChunk.len + name.len + ver.len > BatchSize:
-              flushBatch(bb, resChan, req.searchId, tStart)
+        var p = startProcess(
+          "sh",
+          args = ["-c", "gunzip -c " & metaPath],
+          options = {poUsePath, poStdErrToStdOut},
+        )
+        var outp = p.outputStream
 
-            bb.addPackage(name, ver, repo, instMap.hasKey(name))
-          flushBatch(bb, resChan, req.searchId, tStart)
-        else:
-          let (outp, _) = execCmdEx(toolDef.bin & toolDef.searchCmd & req.query)
-          var bb = initBatchBuilder()
-          for line in outp.splitLines:
-            if line.len == 0:
-              continue
-            var i = 0
-            var fullId, ver: string
-            i += line.parseUntil(fullId, ' ', i)
-            var repo = "unknown"
-            var name = fullId
-            if '/' in fullId:
-              let s = fullId.split('/', 1)
-              repo = s[0]
-              name = s[1]
-            i += line.skipWhitespace(i)
-            i += line.parseUntil(ver, ' ', i)
-            if bb.textChunk.len + name.len + ver.len > BatchSize:
-              flushBatch(bb, resChan, req.searchId, tStart)
+        var parser: JsonParser
+        open(parser, outp, "aur_meta")
+        defer:
+          close(parser)
 
-            bb.addPackage(name, ver, repo, instMap.hasKey(name))
+        var bb = initBatchBuilder()
+        var counter = 0
+        var interrupted = false
+
+        parser.next()
+        while parser.kind != jsonEof and parser.kind != jsonError:
+          if parser.kind == jsonObjectStart:
+            var name, ver: string
+            parser.next()
+            while parser.kind != jsonObjectEnd and parser.kind != jsonEof:
+              if parser.kind == jsonString:
+                let key = parser.str
+                parser.next()
+                if key == "Name" and parser.kind == jsonString:
+                  name = parser.str
+                  parser.next()
+                elif key == "Version" and parser.kind == jsonString:
+                  ver = parser.str
+                  parser.next()
+                else:
+                  if parser.kind in {jsonObjectStart, jsonArrayStart}:
+                    skipJsonBlock(parser)
+                    parser.next()
+                  else:
+                    parser.next()
+              else:
+                parser.next()
+
+            if name.len > 0:
+              if bb.textChunk.len + name.len + ver.len > BatchSize or counter >= 2000:
+                flushBatch(bb, resChan, req.searchId, tStart)
+                counter = 0
+                let (hasNew, newReq) = reqChan.tryRecv()
+                if hasNew and newReq.kind != ReqDetails:
+                  currentReq = newReq
+                  hasReq = true
+                  interrupted = true
+                  break
+              bb.addPackage(name, ver, "aur", instMap.hasKey(name))
+              counter.inc()
+            parser.next()
+          else:
+            parser.next()
+
+        p.close()
+        if not interrupted:
           flushBatch(bb, resChan, req.searchId, tStart)
+      of ReqSearch:
+        let tStart = getMonoTime()
+        let (instOut, _) = execCmdEx("pacman -Q")
+        let instMap = parseInstalledPackages(instOut)
+
+        let (outp, _) = execCmdEx(toolDef.bin & toolDef.searchCmd & req.query)
+        var bb = initBatchBuilder()
+        for line in outp.splitLines:
+          if line.len == 0:
+            continue
+          var i = 0
+          var fullId, ver: string
+          i += line.parseUntil(fullId, ' ', i)
+          var repo = "unknown"
+          var name = fullId
+          if '/' in fullId:
+            let s = fullId.split('/', 1)
+            repo = s[0]
+            name = s[1]
+          i += line.skipWhitespace(i)
+          i += line.parseUntil(ver, ' ', i)
+          if bb.textChunk.len + name.len + ver.len > BatchSize:
+            flushBatch(bb, resChan, req.searchId, tStart)
+
+          bb.addPackage(name, ver, repo, instMap.hasKey(name))
+        flushBatch(bb, resChan, req.searchId, tStart)
       of ReqDetails:
         if req.source == SourceNimble:
           var content = ""
@@ -354,12 +404,15 @@ proc initPackageManager*() =
 
 proc shutdownPackageManager*() =
   reqChan.send(WorkerReq(kind: ReqStop))
-  joinThread(workerThread)
+
   reqChan.close()
   resChan.close()
 
 proc requestLoadAll*(id: int) =
   reqChan.send(WorkerReq(kind: ReqLoadAll, searchId: id))
+
+proc requestLoadAur*(id: int) =
+  reqChan.send(WorkerReq(kind: ReqLoadAur, searchId: id))
 
 proc requestLoadNimble*(id: int) =
   reqChan.send(WorkerReq(kind: ReqLoadNimble, searchId: id))

@@ -26,23 +26,18 @@ proc processInput*(state: var AppState, k: char, listHeight: int) =
 
     if isNimbleQuery:
       switchToNimble(state)
-      state.debouncePending = false
     elif isAurQuery:
-      if state.dataSource != SourceSystem:
+      if state.dataSource != SourceSystem or state.searchMode != ModeAUR:
         switchToSystem(state, ModeAUR)
-      else:
-        if state.searchMode != ModeAUR:
-          switchToSystem(state, ModeAUR)
-      state.debouncePending = true
     else:
       if state.dataSource != state.baseDataSource:
         restoreBaseState(state)
       elif state.dataSource == SourceSystem and state.searchMode != state.baseSearchMode:
         restoreBaseState(state)
 
-      filterIndices(state, state.searchBuffer, state.visibleIndices)
-      state.debouncePending = false
-      state.statusMessage = ""
+    filterIndices(state, state.searchBuffer, state.visibleIndices)
+    state.debouncePending = false
+    state.statusMessage = ""
 
 proc update*(state: AppState, msg: Msg, listHeight: int): AppState =
   result = state
@@ -57,19 +52,17 @@ proc update*(state: AppState, msg: Msg, listHeight: int): AppState =
         result.debouncePending = false
         let effectiveQuery = getEffectiveQuery(result.searchBuffer)
 
-        if effectiveQuery.len > 1:
+        if effectiveQuery.len > 1 and result.searchMode != ModeAUR:
           result.searchId.inc()
           result.isSearching = true
-          result.statusMessage = "Searching AUR..."
+          result.statusMessage = "Searching..."
 
-          var queryToSend = effectiveQuery
-          if result.searchMode == ModeAUR:
-            queryToSend = "aur/" & effectiveQuery
-
-          requestSearch(queryToSend, result.searchId)
+          requestSearch(effectiveQuery, result.searchId)
         else:
-          result.visibleIndices.setLen(0)
-          result.statusMessage = "Type to search AUR..."
+          if result.searchMode != ModeAUR:
+            result.visibleIndices.setLen(0)
+            if result.searchMode == ModeAUR:
+              result.statusMessage = "Type to search AUR..."
   of MsgSearchResults:
     if msg.searchId != result.searchId:
       return result
@@ -128,6 +121,11 @@ proc update*(state: AppState, msg: Msg, listHeight: int): AppState =
         result.nimbleDB.textArena = result.textArena
         result.nimbleDB.repos = result.repos
         result.nimbleDB.isLoaded = true
+      elif result.dataSource == SourceSystem and result.searchMode == ModeAUR:
+        result.aurDB.soa = result.soa
+        result.aurDB.textArena = result.textArena
+        result.aurDB.repos = result.repos
+        result.aurDB.isLoaded = true
 
       if not result.viewingSelection:
         filterIndices(result, result.searchBuffer, result.visibleIndices)
@@ -167,6 +165,11 @@ proc update*(state: AppState, msg: Msg, listHeight: int): AppState =
         result.nimbleDB.textArena = result.textArena
         result.nimbleDB.repos = result.repos
         result.nimbleDB.isLoaded = true
+      elif result.dataSource == SourceSystem and result.searchMode == ModeAUR:
+        result.aurDB.soa = result.soa
+        result.aurDB.textArena = result.textArena
+        result.aurDB.repos = result.repos
+        result.aurDB.isLoaded = true
 
       if not result.viewingSelection:
         filterIndices(result, result.searchBuffer, result.visibleIndices)
