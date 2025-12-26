@@ -1,6 +1,6 @@
 # Package
 
-version = "0.2.4"
+version = "0.2.5"
 author = "Gabriel Capilla"
 description = "Terminal UI for pacman, AUR & nimble"
 license = "MIT"
