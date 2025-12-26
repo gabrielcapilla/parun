@@ -155,6 +155,3 @@ proc getKeyAsync*(): char =
 
   discard fcntl(STDIN_FILENO, F_SETFL, oldFlags)
   return keyValue
-
-func convertToLegacyChar*(k: char): char =
-  return k
