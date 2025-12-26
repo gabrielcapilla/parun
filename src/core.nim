@@ -1,5 +1,5 @@
 import std/[tables, strutils, monotimes, times]
-import types, state, input, pkgManager, pUtils
+import types, state, input, pkgManager
 
 proc processInput*(state: var AppState, k: char, listHeight: int) =
   if k == KeyCtrlS:
@@ -72,7 +72,6 @@ proc update*(state: AppState, msg: Msg, listHeight: int): AppState =
       if result.dataSearchId != msg.searchId:
         result.soa.hot.locators.setLen(0)
         result.soa.hot.nameLens.setLen(0)
-        result.soa.hot.nameHash.setLen(0)
         result.soa.cold.verLens.setLen(0)
         result.soa.cold.repoIndices.setLen(0)
         result.soa.cold.flags.setLen(0)
@@ -109,7 +108,6 @@ proc update*(state: AppState, msg: Msg, listHeight: int): AppState =
 
         result.soa.hot.locators.add(absLoc)
         result.soa.hot.nameLens.add(msg.soa.hot.nameLens[i])
-        result.soa.hot.nameHash.add(msg.soa.hot.nameHash[i])
         result.soa.cold.verLens.add(msg.soa.cold.verLens[i])
         result.soa.cold.repoIndices.add(repoMap[msg.soa.cold.repoIndices[i]])
         result.soa.cold.flags.add(msg.soa.cold.flags[i])
@@ -182,11 +180,6 @@ proc update*(state: AppState, msg: Msg, listHeight: int): AppState =
           result.repoOffsets[i] = repoOffsetMap[repoIdx]
         else:
           result.repoOffsets[i] = 0
-
-      if result.soa.hot.nameHash.len != result.soa.hot.locators.len:
-        for i in 0 ..< result.soa.hot.locators.len:
-          let nameStr = result.getName(i)
-          result.soa.hot.nameHash.add(hashName(nameStr))
 
       if result.dataSource == SourceSystem and result.searchMode == ModeLocal:
         result.systemDB.soa = result.soa
