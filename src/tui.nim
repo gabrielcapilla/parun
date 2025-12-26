@@ -68,6 +68,7 @@ func appendRow(
         printRepoLen = min(repoLen, maxTextW)
 
   let styleIdx = (isCursor.int shl 1) or isSelected.int
+
   buffer.add(PrefixLUT[styleIdx])
 
   if isCursor:
@@ -161,16 +162,10 @@ func renderStatusBar(buffer: var string, state: AppState, termW: int): int =
       ""
 
   var modeStr = ""
-  if state.inputMode == ModeVimCommand:
-    modeStr = fmt"{ColorVimCommand} COMMAND {AnsiReset}"
-  elif state.viewingSelection:
+  if state.viewingSelection:
     modeStr = fmt"{ColorModeReview}[Rev]{AnsiReset}"
   elif state.dataSource == SourceNimble:
     modeStr = fmt"{ColorModeNimble}[Nimble]{AnsiReset}"
-  elif state.inputMode == ModeVimNormal:
-    modeStr = fmt"{ColorVimNormal} NORMAL {AnsiReset}"
-  elif state.inputMode == ModeVimInsert:
-    modeStr = fmt"{ColorVimInsert} INSERT {AnsiReset}"
   else:
     if state.searchMode == ModeAUR:
       modeStr = fmt"{ColorModeAur}[AUR]{AnsiReset}"
@@ -180,22 +175,10 @@ func renderStatusBar(buffer: var string, state: AppState, termW: int): int =
   if state.statusMessage.len > 0:
     modeStr.add(fmt" {AnsiBold}{state.statusMessage}{AnsiReset}")
 
-  var leftSide = ""
-  var cursorVisualX = 0
-  if state.inputMode == ModeVimCommand:
-    leftSide = fmt"{ColorPrompt}:{AnsiReset}{state.commandBuffer}"
-    cursorVisualX = 1 + visibleWidth(state.commandBuffer)
-  else:
-    let promptChar = if state.inputMode == ModeVimNormal: ":" else: ">"
-    leftSide = fmt"{ColorPrompt}{promptChar}{AnsiReset} {state.searchBuffer}"
-    let textBeforeCursor = state.searchBuffer[0 ..< state.searchCursor]
-    cursorVisualX = 2 + visibleWidth(textBeforeCursor)
+  let leftSide = fmt"{ColorPrompt}>{AnsiReset} {state.searchBuffer}"
+  let cursorVisualX = 2 + visibleWidth(state.searchBuffer[0 ..< state.searchCursor])
 
-  let leftSideClean =
-    if state.inputMode == ModeVimCommand:
-      ":" & state.commandBuffer
-    else:
-      (if state.inputMode == ModeVimNormal: ": " else: "> ") & state.searchBuffer
+  let leftSideClean = "> " & state.searchBuffer
   let rightSide = fmt"{statusPrefix}{modeStr} {pkgCountStr}"
   let spacing = max(0, termW - visibleWidth(leftSideClean) - visibleWidth(rightSide))
 
