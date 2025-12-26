@@ -1,5 +1,5 @@
 import std/[tables, monotimes, times]
-import types, pUtils
+import types
 
 type BatchBuilder* = object
   soa*: PackageSOA
@@ -10,7 +10,6 @@ type BatchBuilder* = object
 func initBatchBuilder*(): BatchBuilder =
   result.soa.hot.locators = newSeqOfCap[uint32](1000)
   result.soa.hot.nameLens = newSeqOfCap[uint8](1000)
-  result.soa.hot.nameHash = newSeqOfCap[uint32](1000)
   result.soa.cold.verLens = newSeqOfCap[uint8](1000)
   result.soa.cold.repoIndices = newSeqOfCap[uint8](1000)
   result.soa.cold.flags = newSeqOfCap[uint8](1000)
@@ -38,7 +37,6 @@ proc flushBatch*(
 
     bb.soa.hot.locators.setLen(0)
     bb.soa.hot.nameLens.setLen(0)
-    bb.soa.hot.nameHash.setLen(0)
     bb.soa.cold.verLens.setLen(0)
     bb.soa.cold.repoIndices.setLen(0)
     bb.soa.cold.flags.setLen(0)
@@ -68,7 +66,6 @@ func addPackage*(bb: var BatchBuilder, name, ver, repo: string, installed: bool)
 
   bb.soa.hot.locators.add(offset)
   bb.soa.hot.nameLens.add(uint8(name.len))
-  bb.soa.hot.nameHash.add(hashName(name))
   bb.soa.cold.verLens.add(uint8(ver.len))
   bb.soa.cold.repoIndices.add(rIdx)
   bb.soa.cold.flags.add(if installed: 1 else: 0)
