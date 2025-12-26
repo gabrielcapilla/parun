@@ -1,4 +1,4 @@
-import std/[strutils, tables, unicode]
+import std/strutils
 import types, state
 
 func deleteCharLeft(state: var AppState) =
@@ -99,127 +99,7 @@ func moveCursorWordRight(state: var AppState) =
     while state.searchCursor > 0 and state.searchBuffer[state.searchCursor - 1] == ' ':
       state.searchCursor.dec()
 
-func handleVimCommand(state: var AppState, k: char) =
-  case k
-  of KeyEnter:
-    let cmd = state.commandBuffer.strip()
-    if cmd == "q" or cmd == "q!":
-      state.shouldQuit = true
-    else:
-      state.commandBuffer = ""
-      state.inputMode = ModeVimNormal
-  of KeyEsc:
-    state.commandBuffer = ""
-    state.inputMode = ModeVimNormal
-  of KeyBack, KeyBackspace:
-    if state.commandBuffer.len > 0:
-      state.commandBuffer.setLen(state.commandBuffer.len - 1)
-    else:
-      state.inputMode = ModeVimNormal
-  elif k.ord >= 32 and k.ord <= 126:
-    state.commandBuffer.add(k)
-  else:
-    discard
-
-func handleVimNormal(state: var AppState, k: char, listHeight: int) =
-  case k
-  of 'j', KeyDown, KeyCtrlJ:
-    if state.visibleIndices.len > 0:
-      state.cursor = max(0, state.cursor - 1)
-      state.detailScroll = 0
-  of 'k', KeyUp:
-    if state.visibleIndices.len > 0:
-      state.cursor = min(state.visibleIndices.len - 1, state.cursor + 1)
-      state.detailScroll = 0
-  of 'g', KeyHome:
-    if state.visibleIndices.len > 0:
-      state.cursor = state.visibleIndices.len - 1
-      state.scroll = max(0, state.cursor - listHeight + 1)
-      state.detailScroll = 0
-  of 'G', KeyEnd:
-    if state.visibleIndices.len > 0:
-      state.cursor = 0
-      state.scroll = 0
-      state.detailScroll = 0
-  of KeyCtrlU, KeyPageUp:
-    if state.visibleIndices.len > 0:
-      state.cursor = min(state.visibleIndices.len - 1, state.cursor + listHeight)
-      state.detailScroll = 0
-  of KeyCtrlD, KeyPageDown:
-    if state.visibleIndices.len > 0:
-      state.cursor = max(0, state.cursor - listHeight)
-      state.detailScroll = 0
-  of KeyCtrlY:
-    state.detailScroll = max(0, state.detailScroll - 1)
-  of KeyCtrlE:
-    if state.visibleIndices.len > 0:
-      let idx = state.visibleIndices[state.cursor]
-      if state.detailsCache.hasKey(idx):
-        let lines = state.detailsCache[idx].countLines()
-        if state.detailScroll < lines - 1:
-          state.detailScroll.inc()
-  of 'i':
-    state.inputMode = ModeVimInsert
-  of '/':
-    state.searchBuffer = ""
-    state.searchCursor = 0
-    filterIndices(state, "", state.visibleIndices)
-    state.inputMode = ModeVimInsert
-  of ':':
-    state.commandBuffer = ""
-    state.inputMode = ModeVimCommand
-  of KeySpace:
-    toggleSelectionAtCursor(state)
-  of 'x':
-    state.shouldUninstall = true
-  of KeyEnter:
-    state.shouldInstall = true
-  of KeyEsc:
-    if state.searchBuffer.len > 0:
-      state.searchBuffer = ""
-      state.searchCursor = 0
-      filterIndices(state, "", state.visibleIndices)
-    elif state.viewingSelection:
-      state.viewingSelection = false
-      filterIndices(state, "", state.visibleIndices)
-  else:
-    discard
-
-func handleVimInsert(state: var AppState, k: char, listHeight: int) =
-  case k
-  of KeyEsc:
-    state.inputMode = ModeVimNormal
-  of KeyBack, KeyBackspace:
-    if state.viewingSelection:
-      state.viewingSelection = false
-    deleteCharLeft(state)
-  of char(23), KeyAltBackspace:
-    if state.viewingSelection:
-      state.viewingSelection = false
-    deleteWordLeft(state)
-  of KeyDelete:
-    deleteCharRight(state)
-  of KeyLeft:
-    if state.searchCursor > 0:
-      state.searchCursor.dec()
-  of KeyRight:
-    if state.searchCursor < state.searchBuffer.len:
-      state.searchCursor.inc()
-  of KeyCtrlLeft:
-    moveCursorWordLeft(state)
-  of KeyCtrlRight:
-    moveCursorWordRight(state)
-  of KeyTab:
-    toggleSelectionAtCursor(state)
-  of KeyEnter:
-    state.shouldInstall = true
-  of KeyCtrlR:
-    state.shouldUninstall = true
-  else:
-    if k.ord >= 32 and k.ord <= 126:
-      insertChar(state, k)
-
-func handleStandard(state: var AppState, k: char, listHeight: int) =
+func handleInput*(state: var AppState, k: char, listHeight: int) =
   case k
   of KeyUp:
     if state.visibleIndices.len > 0:
@@ -266,17 +146,6 @@ func handleStandard(state: var AppState, k: char, listHeight: int) =
   else:
     if k.ord >= 32 and k.ord <= 126:
       insertChar(state, k)
-
-func handleInput*(state: var AppState, k: char, listHeight: int) =
-  case state.inputMode
-  of ModeVimCommand:
-    handleVimCommand(state, k)
-  of ModeVimNormal:
-    handleVimNormal(state, k, listHeight)
-  of ModeVimInsert:
-    handleVimInsert(state, k, listHeight)
-  else:
-    handleStandard(state, k, listHeight)
 
   if state.visibleIndices.len > 0:
     state.cursor = clamp(state.cursor, 0, state.visibleIndices.len - 1)
