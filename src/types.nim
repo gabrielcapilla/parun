@@ -6,11 +6,8 @@ const
 
   KeyNull* = char(0)
   KeyCtrlA* = char(1)
-  KeyCtrlB* = char(2)
-  KeyCtrlC* = char(3)
   KeyCtrlD* = char(4)
   KeyCtrlE* = char(5)
-  KeyCtrlF* = char(6)
   KeyBackspace* = char(8)
   KeyTab* = char(9)
   KeyCtrlJ* = char(10)
@@ -19,13 +16,10 @@ const
   KeyCtrlR* = char(18)
   KeyCtrlS* = char(19)
   KeyCtrlU* = char(21)
-  KeyCtrlW* = char(23)
   KeyCtrlY* = char(25)
-  KeyCtrlZ* = char(26)
   KeyEsc* = char(27)
   KeySpace* = char(32)
   KeyBack* = char(127)
-  KeyCtrlBackspace* = char(28)
   KeyAltBackspace* = char(29)
 
   KeyDelete* = char(209)
@@ -40,8 +34,6 @@ const
   KeyPageDown* = char(205)
   KeyHome* = char(206)
   KeyEnd* = char(207)
-  KeyDetailUp* = char(208)
-  KeyDetailDown* = char(209)
   KeyF1* = char(210)
 
   AnsiReset* = "\e[0m"
@@ -79,7 +71,6 @@ type
   PackageHot* = object
     locators*: seq[uint32]
     nameLens*: seq[uint8]
-    nameHash*: seq[uint32]
 
   PackageCold* = object
     verLens*: seq[uint8]
