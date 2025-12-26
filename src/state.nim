@@ -1,18 +1,60 @@
-import std/[strutils, sets, tables, algorithm, math, sequtils, monotimes, bitops]
+import std/[strutils, tables, algorithm, math, monotimes, bitops]
 import types, simd, pkgManager
 
-template getName*(state: AppState, idx: int): string =
+proc appendFromArena(
+    state: AppState, offset, len: int, buffer: var string, maxLen: int = -1
+) {.inline.} =
+  var copyLen = len
+  if maxLen >= 0 and maxLen < len:
+    copyLen = maxLen
+  if copyLen <= 0:
+    return
+
+  let currentLen = buffer.len
+  buffer.setLen(currentLen + copyLen)
+  if state.textArena.len > 0:
+    copyMem(addr buffer[currentLen], unsafeAddr state.textArena[offset], copyLen)
+
+proc appendName*(state: AppState, idx: int, buffer: var string, maxLen: int = -1) =
   let offset = int(state.soa.locators[idx])
   let len = int(state.soa.nameLens[idx])
-  cast[string](state.textArena[offset ..< offset + len])
+  appendFromArena(state, offset, len, buffer, maxLen)
 
-template getVersion*(state: AppState, idx: int): string =
+proc appendVersion*(state: AppState, idx: int, buffer: var string, maxLen: int = -1) =
   let nameLen = int(state.soa.nameLens[idx])
   let offset = int(state.soa.locators[idx]) + nameLen
   let len = int(state.soa.verLens[idx])
-  cast[string](state.textArena[offset ..< offset + len])
+  appendFromArena(state, offset, len, buffer, maxLen)
 
-template getRepo*(state: AppState, idx: int): string =
+proc appendRepo*(state: AppState, idx: int, buffer: var string, maxLen: int = -1) =
+  let rIdx = state.soa.repoIndices[idx]
+  let rName = state.repos[rIdx]
+  let len = rName.len
+  var copyLen = len
+  if maxLen >= 0 and maxLen < len:
+    copyLen = maxLen
+
+  if copyLen > 0:
+    let currentLen = buffer.len
+    buffer.setLen(currentLen + copyLen)
+    copyMem(addr buffer[currentLen], unsafeAddr rName[0], copyLen)
+
+func getNameLen*(state: AppState, idx: int): int {.inline.} =
+  int(state.soa.nameLens[idx])
+func getVersionLen*(state: AppState, idx: int): int {.inline.} =
+  int(state.soa.verLens[idx])
+func getRepoLen*(state: AppState, idx: int): int {.inline.} =
+  state.repos[state.soa.repoIndices[idx]].len
+
+func getName*(state: AppState, idx: int): string =
+  result = newStringOfCap(state.getNameLen(idx))
+  state.appendName(idx, result)
+
+func getVersion*(state: AppState, idx: int): string =
+  result = newStringOfCap(state.getVersionLen(idx))
+  state.appendVersion(idx, result)
+
+func getRepo*(state: AppState, idx: int): string =
   state.repos[state.soa.repoIndices[idx]]
 
 func getPkgId*(state: AppState, idx: int32): string =
@@ -27,26 +69,31 @@ func getEffectiveQuery*(buffer: string): string =
     return buffer[4 ..^ 1]
   return buffer
 
-func filterIndices*(state: AppState, query: string): seq[int32] =
+proc filterIndices*(state: AppState, query: string, results: var seq[int32]) =
+  results.setLen(0)
+
   let effective = getEffectiveQuery(query)
   let cleanQuery = effective.strip()
 
   if state.searchMode == ModeAUR and cleanQuery.len == 0:
-    return @[]
+    return
 
   let totalPkgs = state.soa.locators.len
 
   if cleanQuery.len == 0:
-    return toSeq(0 ..< totalPkgs).mapIt(int32(it))
+    results.setLen(totalPkgs)
+    for i in 0 ..< totalPkgs:
+      results[i] = int32(i)
+    return
 
   let ctx = prepareSearchContext(cleanQuery)
   if not ctx.isValid:
-    return @[]
+    return
 
   var scored = newSeqOfCap[tuple[idx: int32, score: int]](min(2000, totalPkgs))
 
   if state.textArena.len == 0:
-    return @[]
+    return
   let arenaBase = cast[int](unsafeAddr state.textArena[0])
 
   for i in 0 ..< totalPkgs:
@@ -59,7 +106,10 @@ func filterIndices*(state: AppState, query: string): seq[int32] =
 
   scored.sort do(a, b: auto) -> int:
     cmp(b.score, a.score)
-  return scored.mapIt(it.idx)
+
+  results.setLen(scored.len)
+  for i in 0 ..< scored.len:
+    results[i] = scored[i].idx
 
 proc isSelected*(state: AppState, idx: int): bool {.inline.} =
   let wordIdx = idx div 64
@@ -81,8 +131,8 @@ proc getSelectedCount*(state: AppState): int =
   for word in state.selectionBits:
     result += countSetBits(word)
 
-func filterBySelection*(state: AppState): seq[int32] =
-  result = newSeqOfCap[int32](state.getSelectedCount())
+proc filterBySelection*(state: AppState, results: var seq[int32]) =
+  results.setLen(0)
   let totalPkgs = state.soa.locators.len
   for i, word in state.selectionBits:
     if word == 0:
@@ -91,7 +141,7 @@ func filterBySelection*(state: AppState): seq[int32] =
       if testBit(word, bit):
         let realIdx = i * 64 + bit
         if realIdx < totalPkgs:
-          result.add(int32(realIdx))
+          results.add(int32(realIdx))
 
 proc saveCurrentToDB*(state: var AppState) =
   if state.dataSource == SourceSystem:
@@ -118,7 +168,7 @@ proc loadFromDB*(state: var AppState, source: DataSource) =
 
 proc switchToNimble*(state: var AppState) =
   if state.dataSource != SourceNimble:
-    state.visibleIndices = @[]
+    state.visibleIndices.setLen(0)
     saveCurrentToDB(state)
     state.dataSource = SourceNimble
     state.searchId.inc()
@@ -129,11 +179,11 @@ proc switchToNimble*(state: var AppState) =
     if not state.nimbleDB.isLoaded:
       requestLoadNimble(state.searchId)
     else:
-      state.visibleIndices = filterIndices(state, state.searchBuffer)
+      filterIndices(state, state.searchBuffer, state.visibleIndices)
 
 proc switchToSystem*(state: var AppState, mode: SearchMode) =
   if state.dataSource != SourceSystem or state.searchMode != mode:
-    state.visibleIndices = @[]
+    state.visibleIndices.setLen(0)
     saveCurrentToDB(state)
     state.dataSource = SourceSystem
     state.searchMode = mode
@@ -147,9 +197,8 @@ proc switchToSystem*(state: var AppState, mode: SearchMode) =
       if not state.systemDB.isLoaded:
         requestLoadAll(state.searchId)
       else:
-        state.visibleIndices = filterIndices(state, state.searchBuffer)
+        filterIndices(state, state.searchBuffer, state.visibleIndices)
     else:
-      # ModeAUR: Clear current data to prepare for search results
       state.soa.locators.setLen(0)
       state.soa.nameLens.setLen(0)
       state.soa.verLens.setLen(0)
@@ -203,7 +252,6 @@ proc newState*(
     lastInputTime: getMonoTime(),
     debouncePending: false,
     statusMessage: "",
-    # FIX: Assign initial values correctly
     showDetails: initialShowDetails,
     needsRedraw: true,
     detailScroll: 0,
