@@ -114,6 +114,7 @@ type
     repos*: seq[string]
 
     systemDB*: PackageDB
+    aurDB*: PackageDB
     nimbleDB*: PackageDB
 
     visibleIndices*: seq[int32]
