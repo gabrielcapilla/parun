@@ -61,8 +61,8 @@ func getRepo*(state: AppState, idx: int): string =
   let repoLen = int(state.repoLens[int(state.soa.cold.repoIndices[idx])])
   if repoOffset + repoLen <= state.repoArena.len:
     result = newStringOfCap(repoLen)
-    for i in repoOffset ..< repoOffset + repoLen:
-      result.add(state.repoArena[i])
+    result.setLen(repoLen)
+    copyMem(addr result[0], unsafeAddr state.repoArena[repoOffset], repoLen)
     return result
   return ""
 
