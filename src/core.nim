@@ -2,20 +2,19 @@ import std/[tables, strutils, monotimes, times]
 import types, state, input, pkgManager
 
 proc processInput*(state: var AppState, k: char, listHeight: int) =
-  if state.inputMode != ModeVimCommand:
-    if k == KeyCtrlS:
-      state.viewingSelection = not state.viewingSelection
-      state.cursor = 0
-      state.scroll = 0
-      if state.viewingSelection:
-        filterBySelection(state, state.visibleIndices)
-      else:
-        filterIndices(state, state.searchBuffer, state.visibleIndices)
-      return
+  if k == KeyCtrlS:
+    state.viewingSelection = not state.viewingSelection
+    state.cursor = 0
+    state.scroll = 0
+    if state.viewingSelection:
+      filterBySelection(state, state.visibleIndices)
+    else:
+      filterIndices(state, state.searchBuffer, state.visibleIndices)
+    return
 
-    if k == KeyF1:
-      state.showDetails = not state.showDetails
-      return
+  if k == KeyF1:
+    state.showDetails = not state.showDetails
+    return
 
   handleInput(state, k, listHeight)
   state.lastInputTime = getMonoTime()
@@ -52,8 +51,6 @@ proc update*(state: AppState, msg: Msg, listHeight: int): AppState =
   case msg.kind
   of MsgInput:
     processInput(result, msg.key, listHeight)
-  of MsgInputNew:
-    processInput(result, msg.legacyKey, listHeight)
   of MsgTick:
     if result.debouncePending:
       if (getMonoTime() - result.lastInputTime).inMilliseconds > 500:
