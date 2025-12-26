@@ -56,25 +56,3 @@ func truncate*(s: string, w: int): string =
   if clean.runeLen <= w:
     return clean
   return clean.runeSubStr(0, w)
-
-func sanitizeShell*(s: string): string =
-  result = newStringOfCap(s.len)
-  for c in s:
-    case c
-    of 'a' .. 'z',
-        'A' .. 'Z',
-        '0' .. '9',
-        '-',
-        '_',
-        '.',
-        '/',
-        '+',
-        '=',
-        '@',
-        '%',
-        ' ',
-        ',',
-        ':':
-      result.add(c)
-    else:
-      result.add('_')
