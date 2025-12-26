@@ -59,9 +59,6 @@ const
   ColorModeAur* = "\e[1;35m"
   ColorModeNimble* = "\e[1;33m"
   ColorModeReview* = "\e[1;33m"
-  ColorVimNormal* = "\e[1;44;97m"
-  ColorVimInsert* = "\e[1;42;97m"
-  ColorVimCommand* = "\e[1;41;97m"
 
 type
   SearchMode* = enum
@@ -72,15 +69,8 @@ type
     SourceSystem
     SourceNimble
 
-  InputMode* = enum
-    ModeStandard
-    ModeVimNormal
-    ModeVimInsert
-    ModeVimCommand
-
   MsgKind* = enum
     MsgInput
-    MsgInputNew
     MsgTick
     MsgSearchResults
     MsgDetailsLoaded
@@ -97,8 +87,6 @@ type
     case kind*: MsgKind
     of MsgInput:
       key*: char
-    of MsgInputNew:
-      legacyKey*: char
     of MsgTick:
       discard
     of MsgSearchResults:
@@ -136,7 +124,6 @@ type
     scroll*: int
     searchBuffer*: string
     searchCursor*: int
-    commandBuffer*: string
 
     searchMode*: SearchMode
     dataSource*: DataSource
@@ -144,7 +131,6 @@ type
     baseSearchMode*: SearchMode
     baseDataSource*: DataSource
 
-    inputMode*: InputMode
     viewingSelection*: bool
 
     isSearching*: bool
