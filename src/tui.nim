@@ -168,7 +168,7 @@ func renderStatusBar(buffer: var string, state: AppState, termW: int): int =
     modeStr = fmt"{ColorModeNimble}[Nimble]{AnsiReset}"
   else:
     if state.searchMode == ModeAUR:
-      modeStr = fmt"{ColorModeAur}[AUR]{AnsiReset}"
+      modeStr = fmt"{ColorModeAur}[Aur]{AnsiReset}"
     else:
       modeStr = fmt"{ColorModeLocal}[Local]{AnsiReset}"
 
