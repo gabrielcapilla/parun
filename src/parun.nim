@@ -5,7 +5,6 @@ proc main() =
   var
     startMode = ModeLocal
     startShowDetails = true
-    useVim = false
     startNimble = false
 
   var p = initOptParser()
@@ -15,8 +14,6 @@ proc main() =
       case key
       of "noinfo", "n":
         startShowDetails = false
-      of "vim", "v":
-        useVim = true
       of "nimble", "nim":
         startNimble = true
       else:
@@ -27,7 +24,7 @@ proc main() =
   var origTerm = initTerminal()
   initPackageManager()
 
-  var appState = newState(startMode, startShowDetails, useVim, startNimble)
+  var appState = newState(startMode, startShowDetails, startNimble)
 
   if startNimble:
     requestLoadNimble(appState.searchId)
@@ -106,14 +103,8 @@ proc main() =
       setCursorPos(0, 0)
       stdout.write(renderBuffer)
 
-      if appState.inputMode == ModeVimCommand:
-        setCursorPos(res.cursorX, res.cursorY)
-        stdout.write("\e[?25h")
-      elif appState.inputMode == ModeVimNormal:
-        setCursorPos(terminalWidth(), terminalHeight())
-      else:
-        setCursorPos(res.cursorX, res.cursorY)
-        stdout.write("\e[?25h")
+      setCursorPos(res.cursorX, res.cursorY)
+      stdout.write("\e[?25h")
 
       stdout.flushFile()
       appState.needsRedraw = false
@@ -141,12 +132,10 @@ proc main() =
           if appState.shouldQuit:
             break
 
-          let inInsert =
-            appState.inputMode == ModeStandard or appState.inputMode == ModeVimInsert
           let isEditing =
             (k.ord >= 32 and k.ord <= 126) or k == KeyBack or k == KeyBackspace
           let isToggle = (k == KeyCtrlA)
-          let shouldCheckNetwork = (isEditing and inInsert) or isToggle
+          let shouldCheckNetwork = isEditing or isToggle
 
           if shouldCheckNetwork and not appState.viewingSelection:
             if appState.dataSource == SourceSystem:
