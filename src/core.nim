@@ -84,22 +84,21 @@ proc update*(state: AppState, msg: Msg, listHeight: int): AppState =
 
       var repoMap = newSeq[uint8](msg.repos.len)
       var repoOffsetMap = newSeq[uint16](msg.repos.len)
+      var repoLookup = initTable[string, uint8]()
+
       for i, r in msg.repos:
-        var found = -1
-        for j, existing in result.repos:
-          if existing == r:
-            found = j
-            break
-        if found == -1:
+        if r in repoLookup:
+          let foundIdx = repoLookup[r]
+          repoMap[i] = foundIdx
+          repoOffsetMap[i] = repoOffsetMap[foundIdx]
+        else:
+          repoLookup[r] = uint8(result.repos.len)
           repoMap[i] = uint8(result.repos.len)
           repoOffsetMap[i] = uint16(result.repoArena.len)
           result.repos.add(r)
           result.repoLens.add(uint8(r.len))
           for c in r:
             result.repoArena.add(c)
-        else:
-          repoMap[i] = uint8(found)
-          repoOffsetMap[i] = repoOffsetMap[found]
 
       let baseOffset = uint32(result.textArena.len)
       for c in msg.textChunk:
