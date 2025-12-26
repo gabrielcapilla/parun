@@ -253,7 +253,7 @@ proc restoreBaseState*(state: var AppState) =
 proc initPackageDB(): PackageDB =
   PackageDB(
     soa: PackageSOA(
-      hot: PackageHot(locators: @[], nameLens: @[], nameHash: @[]),
+      hot: PackageHot(locators: @[], nameLens: @[]),
       cold: PackageCold(verLens: @[], repoIndices: @[], flags: @[]),
     ),
     textArena: @[],
@@ -270,7 +270,7 @@ proc newState*(
   let ds = if startNimble: SourceNimble else: SourceSystem
   AppState(
     soa: PackageSOA(
-      hot: PackageHot(locators: @[], nameLens: @[], nameHash: @[]),
+      hot: PackageHot(locators: @[], nameLens: @[]),
       cold: PackageCold(verLens: @[], repoIndices: @[], flags: @[]),
     ),
     textArena: @[],
