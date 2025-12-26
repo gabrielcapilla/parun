@@ -50,7 +50,7 @@ proc main() =
     if appState.shouldInstall or appState.shouldUninstall:
       var targets: seq[string] = @[]
       let selCount = appState.getSelectedCount()
-      let totalPkgs = appState.soa.locators.len
+      let totalPkgs = appState.soa.hot.locators.len
 
       if selCount > 0:
         for i, word in appState.selectionBits:

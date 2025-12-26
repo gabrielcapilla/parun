@@ -76,12 +76,24 @@ type
     MsgDetailsLoaded
     MsgError
 
-  PackageSOA* = object
+  PackageHot* = object
     locators*: seq[uint32]
     nameLens*: seq[uint8]
+    nameHash*: seq[uint32]
+
+  PackageCold* = object
     verLens*: seq[uint8]
     repoIndices*: seq[uint8]
     flags*: seq[uint8]
+
+  PackageSOA* = object
+    hot*: PackageHot
+    cold*: PackageCold
+
+  ResultsBuffer* = object
+    indices*: array[2000, int32]
+    scores*: array[2000, int]
+    count*: int
 
   Msg* = object
     case kind*: MsgKind
@@ -106,12 +118,18 @@ type
     soa*: PackageSOA
     textArena*: seq[char]
     repos*: seq[string]
+    repoArena*: seq[char]
+    repoLens*: seq[uint8]
+    repoOffsets*: seq[uint16]
     isLoaded*: bool
 
   AppState* = object
     soa*: PackageSOA
     textArena*: seq[char]
     repos*: seq[string]
+    repoArena*: seq[char]
+    repoLens*: seq[uint8]
+    repoOffsets*: seq[uint16]
 
     systemDB*: PackageDB
     aurDB*: PackageDB
@@ -151,5 +169,5 @@ type
     lastInputTime*: MonoTime
     debouncePending*: bool
 
-func isInstalled*(flags: uint8): bool {.inline.} =
-  (flags and 1) != 0
+func isInstalled*(state: AppState, idx: int): bool {.inline.} =
+  (state.soa.cold.flags[idx] and 1) != 0

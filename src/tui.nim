@@ -32,7 +32,7 @@ func appendRow(
     isCursor, isSelected: bool,
 ) =
   let i = int(idx)
-  let isInstalled = state.soa.flags[i].isInstalled
+  let isInstalled = state.isInstalled(i)
   let tagW = if isInstalled: InstalledLen else: 0
   let maxTextW = max(0, width - PrefixLen - tagW)
 
@@ -149,10 +149,10 @@ func renderDetails(buffer: var string, state: AppState, r, listH, detailTextW: i
 
 func renderStatusBar(buffer: var string, state: AppState, termW: int): int =
   let pkgCountStr =
-    if state.soa.locators.len == 0:
+    if state.soa.hot.locators.len == 0:
       fmt"{AnsiDim}(...){AnsiReset}"
     else:
-      fmt"{AnsiDim}({state.visibleIndices.len}/{state.soa.locators.len}){AnsiReset}"
+      fmt"{AnsiDim}({state.visibleIndices.len}/{state.soa.hot.locators.len}){AnsiReset}"
 
   let selCount = state.getSelectedCount()
   let statusPrefix =

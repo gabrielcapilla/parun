@@ -64,11 +64,63 @@ const Tools*: array[PkgManagerType, ToolDef] = [
   ManNimble: createNimbleToolDef(),
 ]
 
+const
+  AurMetaUrl* = "https://aur.archlinux.org/packages-meta-v1.json.gz"
+  NimbleMetaUrl* =
+    "https://raw.githubusercontent.com/nim-lang/packages/refs/heads/master/packages.json"
+  CacheMaxAgeHours* = 24
+
+type CachedJsonSource* = object
+  localFallbackPath*: string
+  cachePath*: string
+  url*: string
+  maxAgeHours*: int
+  isCompressed*: bool
+
 var
   reqChan: Channel[WorkerReq]
   resChan: Channel[Msg]
   workerThread: Thread[PkgManagerType]
   activeTool*: PkgManagerType
+
+proc downloadJsonToCache*(url, cachePath: string): bool =
+  let cmd = "curl -s -L -o " & cachePath & " " & url
+  return execCmd(cmd) == 0
+
+proc getFreshJsonPath*(
+    source: CachedJsonSource
+): tuple[path: string, wasDownloaded: bool] =
+  let cacheDir = getHomeDir() / ".cache/parun"
+  createDir(cacheDir)
+
+  let actualCachePath = cacheDir / source.cachePath
+
+  var bestPath = ""
+  var ageHours = high(int)
+
+  if fileExists(actualCachePath):
+    let info = getFileInfo(actualCachePath)
+    ageHours = (getTime() - info.lastWriteTime).inHours
+    if ageHours < source.maxAgeHours:
+      bestPath = actualCachePath
+
+  if bestPath.len == 0 and source.localFallbackPath.len > 0:
+    if fileExists(source.localFallbackPath):
+      let info = getFileInfo(source.localFallbackPath)
+      let localAge = (getTime() - info.lastWriteTime).inHours
+      if localAge < source.maxAgeHours:
+        bestPath = source.localFallbackPath
+        ageHours = localAge
+
+  var wasDownloaded = false
+  if bestPath.len == 0 or ageHours >= source.maxAgeHours:
+    if downloadJsonToCache(source.url, actualCachePath):
+      bestPath = actualCachePath
+      wasDownloaded = true
+    elif source.localFallbackPath.len > 0 and fileExists(source.localFallbackPath):
+      bestPath = source.localFallbackPath
+
+  return (bestPath, wasDownloaded)
 
 proc skipJsonBlock(p: var JsonParser) =
   var depth = 1
@@ -156,9 +208,23 @@ proc workerLoop(toolType: PkgManagerType) {.thread.} =
           if parts.len > 0:
             installedSet.incl(parts[0])
 
-        let pkgFile = getHomeDir() / ".nimble/packages_official.json"
-        if not fileExists(pkgFile):
-          resChan.send(Msg(kind: MsgError, errMsg: "package_official.json missing"))
+        let nimbleSource = CachedJsonSource(
+          localFallbackPath: getHomeDir() / ".nimble/packages_official.json",
+          cachePath: "nimble-packages.json",
+          url: NimbleMetaUrl,
+          maxAgeHours: CacheMaxAgeHours,
+          isCompressed: false,
+        )
+
+        let (pkgFile, _) = getFreshJsonPath(nimbleSource)
+        if pkgFile.len == 0:
+          resChan.send(
+            Msg(
+              kind: MsgError,
+              errMsg:
+                "No Nimble packages available (download failed and no local cache)",
+            )
+          )
           continue
 
         var fs = newFileStream(pkgFile, fmRead)
@@ -174,7 +240,7 @@ proc workerLoop(toolType: PkgManagerType) {.thread.} =
 
         while parser.kind != jsonEof and parser.kind != jsonError:
           if parser.kind == jsonObjectStart:
-            var name, url = ""
+            var name, version, url = ""
             var tags: seq[string] = @[]
             parser.next()
             while parser.kind != jsonObjectEnd and parser.kind != jsonEof:
@@ -183,6 +249,9 @@ proc workerLoop(toolType: PkgManagerType) {.thread.} =
                 parser.next()
                 if key == "name" and parser.kind == jsonString:
                   name = parser.str
+                  parser.next()
+                elif key == "version" and parser.kind == jsonString:
+                  version = parser.str
                   parser.next()
                 elif key == "url" and parser.kind == jsonString:
                   url = parser.str
@@ -204,9 +273,10 @@ proc workerLoop(toolType: PkgManagerType) {.thread.} =
                 parser.next()
 
             if name.len > 0:
+              let ver = if version.len > 0: version else: "latest"
               if url.len > 0:
                 nimbleMetaCache[name] = (url: url, tags: tags)
-              if bb.textChunk.len + name.len + 10 > BatchSize or counter >= 500:
+              if bb.textChunk.len + name.len + ver.len > BatchSize or counter >= 500:
                 flushBatch(bb, resChan, req.searchId, tStart)
                 counter = 0
                 let (hasNew, newReq) = reqChan.tryRecv()
@@ -215,7 +285,7 @@ proc workerLoop(toolType: PkgManagerType) {.thread.} =
                   hasReq = true
                   interrupted = true
                   break
-              bb.addPackage(name, "latest", "nimble", name in installedSet)
+              bb.addPackage(name, ver, "nimble", name in installedSet)
               counter.inc()
             parser.next()
           else:
@@ -225,21 +295,18 @@ proc workerLoop(toolType: PkgManagerType) {.thread.} =
           flushBatch(bb, resChan, req.searchId, tStart)
       of ReqLoadAur:
         let tStart = getMonoTime()
-        let cacheDir = getHomeDir() / ".cache/parun"
-        createDir(cacheDir)
-        let metaPath = cacheDir / "packages-meta-v1.json.gz"
-        let url = "https://aur.archlinux.org/packages-meta-v1.json.gz"
+        let aurSource = CachedJsonSource(
+          localFallbackPath: "",
+          cachePath: "aur-packages-meta-v1.json.gz",
+          url: AurMetaUrl,
+          maxAgeHours: CacheMaxAgeHours,
+          isCompressed: true,
+        )
 
-        var needDownload = true
-        if fileExists(metaPath):
-          let info = getFileInfo(metaPath)
-          if (getTime() - info.lastWriteTime).inHours < 24:
-            needDownload = false
-
-        if needDownload:
-          if execCmd("curl -s -L -o " & metaPath & " " & url) != 0:
-            resChan.send(Msg(kind: MsgError, errMsg: "Failed to download AUR metadata"))
-            continue
+        let (metaPath, _) = getFreshJsonPath(aurSource)
+        if metaPath.len == 0:
+          resChan.send(Msg(kind: MsgError, errMsg: "Failed to download AUR metadata"))
+          continue
 
         let (instOut, _) = execCmdEx("pacman -Q")
         let instMap = parseInstalledPackages(instOut)

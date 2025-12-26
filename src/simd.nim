@@ -1,5 +1,6 @@
 import nimsimd/sse2
 import std/[bitops, strutils]
+import types
 
 const VectorSize = 16
 
@@ -159,4 +160,35 @@ func scorePackageSimd*(textPtr: ptr char, len: int, ctx: SearchContext): int =
   let density = float(ctx.tokens.join(" ").len) / float(len)
   totalScore = int(float(totalScore) * (1.0 + density))
 
-  return totalScore
+  return min(totalScore, 999)
+
+proc countingSortResults*(buf: var ResultsBuffer) =
+  if buf.count == 0:
+    return
+
+  const MaxScore = 1000
+  var counts: array[MaxScore, uint16]
+
+  for i in 0 ..< buf.count:
+    let s = buf.scores[i]
+    inc(counts[s])
+
+  var prefixSums: array[MaxScore, uint16]
+  var running: uint16 = 0
+  for s in 0 ..< MaxScore:
+    prefixSums[s] = running
+    running += counts[s]
+
+  var outputIndices: array[2000, int32]
+  var outputScores: array[2000, int]
+
+  for i in 0 ..< buf.count:
+    let s = buf.scores[i]
+    let pos = prefixSums[s]
+    outputIndices[pos] = buf.indices[i]
+    outputScores[pos] = buf.scores[i]
+    inc(prefixSums[s])
+
+  for i in 0 ..< buf.count:
+    buf.indices[i] = outputIndices[buf.count - 1 - i]
+    buf.scores[i] = outputScores[buf.count - 1 - i]

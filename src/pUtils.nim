@@ -1,5 +1,12 @@
 import std/[strutils, tables, parseutils]
 
+func hashName*(name: string): uint32 =
+  result = 2166136261'u32
+  for c in name:
+    result = result xor uint32(c)
+    result = result * 16777619'u32
+  return result
+
 func parseInstalledPackages*(output: string): Table[string, string] =
   result = initTable[string, string]()
   for line in output.splitLines:

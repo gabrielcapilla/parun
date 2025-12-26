@@ -1,4 +1,4 @@
-import std/[strutils, tables, algorithm, math, monotimes, bitops]
+import std/[strutils, tables, math, monotimes, bitops]
 import types, simd, pkgManager
 
 proc appendFromArena(
@@ -16,35 +16,37 @@ proc appendFromArena(
     copyMem(addr buffer[currentLen], unsafeAddr state.textArena[offset], copyLen)
 
 proc appendName*(state: AppState, idx: int, buffer: var string, maxLen: int = -1) =
-  let offset = int(state.soa.locators[idx])
-  let len = int(state.soa.nameLens[idx])
+  let offset = int(state.soa.hot.locators[idx])
+  let len = int(state.soa.hot.nameLens[idx])
   appendFromArena(state, offset, len, buffer, maxLen)
 
 proc appendVersion*(state: AppState, idx: int, buffer: var string, maxLen: int = -1) =
-  let nameLen = int(state.soa.nameLens[idx])
-  let offset = int(state.soa.locators[idx]) + nameLen
-  let len = int(state.soa.verLens[idx])
+  let nameLen = int(state.soa.hot.nameLens[idx])
+  let offset = int(state.soa.hot.locators[idx]) + nameLen
+  let len = int(state.soa.cold.verLens[idx])
   appendFromArena(state, offset, len, buffer, maxLen)
 
 proc appendRepo*(state: AppState, idx: int, buffer: var string, maxLen: int = -1) =
-  let rIdx = state.soa.repoIndices[idx]
-  let rName = state.repos[rIdx]
-  let len = rName.len
-  var copyLen = len
-  if maxLen >= 0 and maxLen < len:
+  let rIdx = state.soa.cold.repoIndices[idx]
+  let rOffset = int(state.repoOffsets[idx])
+  let rLen = int(state.repoLens[int(rIdx)])
+  var copyLen = rLen
+  if maxLen >= 0 and maxLen < rLen:
     copyLen = maxLen
 
   if copyLen > 0:
     let currentLen = buffer.len
     buffer.setLen(currentLen + copyLen)
-    copyMem(addr buffer[currentLen], unsafeAddr rName[0], copyLen)
+    copyMem(addr buffer[currentLen], unsafeAddr state.repoArena[rOffset], copyLen)
 
 func getNameLen*(state: AppState, idx: int): int {.inline.} =
-  int(state.soa.nameLens[idx])
+  int(state.soa.hot.nameLens[idx])
+
 func getVersionLen*(state: AppState, idx: int): int {.inline.} =
-  int(state.soa.verLens[idx])
+  int(state.soa.cold.verLens[idx])
+
 func getRepoLen*(state: AppState, idx: int): int {.inline.} =
-  state.repos[state.soa.repoIndices[idx]].len
+  int(state.repoLens[int(state.soa.cold.repoIndices[idx])])
 
 func getName*(state: AppState, idx: int): string =
   result = newStringOfCap(state.getNameLen(idx))
@@ -55,7 +57,14 @@ func getVersion*(state: AppState, idx: int): string =
   state.appendVersion(idx, result)
 
 func getRepo*(state: AppState, idx: int): string =
-  state.repos[state.soa.repoIndices[idx]]
+  let repoOffset = int(state.repoOffsets[idx])
+  let repoLen = int(state.repoLens[int(state.soa.cold.repoIndices[idx])])
+  if repoOffset + repoLen <= state.repoArena.len:
+    result = newStringOfCap(repoLen)
+    for i in repoOffset ..< repoOffset + repoLen:
+      result.add(state.repoArena[i])
+    return result
+  return ""
 
 func getPkgId*(state: AppState, idx: int32): string =
   state.getRepo(int(idx)) & "/" & state.getName(int(idx))
@@ -75,7 +84,7 @@ proc filterIndices*(state: AppState, query: string, results: var seq[int32]) =
   let effective = getEffectiveQuery(query)
   let cleanQuery = effective.strip()
 
-  let totalPkgs = state.soa.locators.len
+  let totalPkgs = state.soa.hot.locators.len
 
   if cleanQuery.len == 0:
     results.setLen(totalPkgs)
@@ -87,26 +96,31 @@ proc filterIndices*(state: AppState, query: string, results: var seq[int32]) =
   if not ctx.isValid:
     return
 
-  var scored = newSeqOfCap[tuple[idx: int32, score: int]](min(2000, totalPkgs))
+  var buf: ResultsBuffer
+  buf.count = 0
 
   if state.textArena.len == 0:
     return
   let arenaBase = cast[int](unsafeAddr state.textArena[0])
 
   for i in 0 ..< totalPkgs:
-    let offset = int(state.soa.locators[i])
+    if buf.count >= 2000:
+      break
+
+    let offset = int(state.soa.hot.locators[i])
     let namePtr = cast[ptr char](arenaBase + offset)
 
-    let s = scorePackageSimd(namePtr, int(state.soa.nameLens[i]), ctx)
+    let s = scorePackageSimd(namePtr, int(state.soa.hot.nameLens[i]), ctx)
     if s > 0:
-      scored.add((int32(i), s))
+      buf.indices[buf.count] = int32(i)
+      buf.scores[buf.count] = s
+      inc(buf.count)
 
-  scored.sort do(a, b: auto) -> int:
-    cmp(b.score, a.score)
+  countingSortResults(buf)
 
-  results.setLen(scored.len)
-  for i in 0 ..< scored.len:
-    results[i] = scored[i].idx
+  results.setLen(buf.count)
+  for i in 0 ..< buf.count:
+    results[i] = buf.indices[i]
 
 proc isSelected*(state: AppState, idx: int): bool {.inline.} =
   let wordIdx = idx div 64
@@ -130,7 +144,7 @@ proc getSelectedCount*(state: AppState): int =
 
 proc filterBySelection*(state: AppState, results: var seq[int32]) =
   results.setLen(0)
-  let totalPkgs = state.soa.locators.len
+  let totalPkgs = state.soa.hot.locators.len
   for i, word in state.selectionBits:
     if word == 0:
       continue
@@ -146,16 +160,25 @@ proc saveCurrentToDB*(state: var AppState) =
       state.systemDB.soa = state.soa
       state.systemDB.textArena = state.textArena
       state.systemDB.repos = state.repos
+      state.systemDB.repoArena = state.repoArena
+      state.systemDB.repoLens = state.repoLens
+      state.systemDB.repoOffsets = state.repoOffsets
       state.systemDB.isLoaded = true
     else:
       state.aurDB.soa = state.soa
       state.aurDB.textArena = state.textArena
       state.aurDB.repos = state.repos
+      state.aurDB.repoArena = state.repoArena
+      state.aurDB.repoLens = state.repoLens
+      state.aurDB.repoOffsets = state.repoOffsets
       state.aurDB.isLoaded = true
   else:
     state.nimbleDB.soa = state.soa
     state.nimbleDB.textArena = state.textArena
     state.nimbleDB.repos = state.repos
+    state.nimbleDB.repoArena = state.repoArena
+    state.nimbleDB.repoLens = state.repoLens
+    state.nimbleDB.repoOffsets = state.repoOffsets
     state.nimbleDB.isLoaded = true
 
 proc loadFromDB*(state: var AppState, source: DataSource) =
@@ -164,14 +187,23 @@ proc loadFromDB*(state: var AppState, source: DataSource) =
       state.soa = state.systemDB.soa
       state.textArena = state.systemDB.textArena
       state.repos = state.systemDB.repos
+      state.repoArena = state.systemDB.repoArena
+      state.repoLens = state.systemDB.repoLens
+      state.repoOffsets = state.systemDB.repoOffsets
     else:
       state.soa = state.aurDB.soa
       state.textArena = state.aurDB.textArena
       state.repos = state.aurDB.repos
+      state.repoArena = state.aurDB.repoArena
+      state.repoLens = state.aurDB.repoLens
+      state.repoOffsets = state.aurDB.repoOffsets
   else:
     state.soa = state.nimbleDB.soa
     state.textArena = state.nimbleDB.textArena
     state.repos = state.nimbleDB.repos
+    state.repoArena = state.nimbleDB.repoArena
+    state.repoLens = state.nimbleDB.repoLens
+    state.repoOffsets = state.nimbleDB.repoOffsets
 
 proc switchToNimble*(state: var AppState) =
   if state.dataSource != SourceNimble:
@@ -221,10 +253,14 @@ proc restoreBaseState*(state: var AppState) =
 proc initPackageDB(): PackageDB =
   PackageDB(
     soa: PackageSOA(
-      locators: @[], nameLens: @[], verLens: @[], repoIndices: @[], flags: @[]
+      hot: PackageHot(locators: @[], nameLens: @[], nameHash: @[]),
+      cold: PackageCold(verLens: @[], repoIndices: @[], flags: @[]),
     ),
     textArena: @[],
     repos: @[],
+    repoArena: @[],
+    repoLens: @[],
+    repoOffsets: @[],
     isLoaded: false,
   )
 
@@ -234,10 +270,14 @@ proc newState*(
   let ds = if startNimble: SourceNimble else: SourceSystem
   AppState(
     soa: PackageSOA(
-      locators: @[], nameLens: @[], verLens: @[], repoIndices: @[], flags: @[]
+      hot: PackageHot(locators: @[], nameLens: @[], nameHash: @[]),
+      cold: PackageCold(verLens: @[], repoIndices: @[], flags: @[]),
     ),
     textArena: @[],
     repos: @[],
+    repoArena: @[],
+    repoLens: @[],
+    repoOffsets: @[],
     systemDB: initPackageDB(),
     aurDB: initPackageDB(),
     nimbleDB: initPackageDB(),

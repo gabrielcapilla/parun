@@ -1,5 +1,5 @@
 import std/[tables, strutils, monotimes, times]
-import types, state, input, pkgManager
+import types, state, input, pkgManager, pUtils
 
 proc processInput*(state: var AppState, k: char, listHeight: int) =
   if k == KeyCtrlS:
@@ -70,11 +70,12 @@ proc update*(state: AppState, msg: Msg, listHeight: int): AppState =
 
     if msg.isAppend:
       if result.dataSearchId != msg.searchId:
-        result.soa.locators.setLen(0)
-        result.soa.nameLens.setLen(0)
-        result.soa.verLens.setLen(0)
-        result.soa.repoIndices.setLen(0)
-        result.soa.flags.setLen(0)
+        result.soa.hot.locators.setLen(0)
+        result.soa.hot.nameLens.setLen(0)
+        result.soa.hot.nameHash.setLen(0)
+        result.soa.cold.verLens.setLen(0)
+        result.soa.cold.repoIndices.setLen(0)
+        result.soa.cold.flags.setLen(0)
         result.textArena.setLen(0)
         result.repos.setLen(0)
         result.selectionBits.setLen(0)
@@ -82,6 +83,7 @@ proc update*(state: AppState, msg: Msg, listHeight: int): AppState =
         result.dataSearchId = msg.searchId
 
       var repoMap = newSeq[uint8](msg.repos.len)
+      var repoOffsetMap = newSeq[uint16](msg.repos.len)
       for i, r in msg.repos:
         var found = -1
         for j, existing in result.repos:
@@ -90,24 +92,31 @@ proc update*(state: AppState, msg: Msg, listHeight: int): AppState =
             break
         if found == -1:
           repoMap[i] = uint8(result.repos.len)
+          repoOffsetMap[i] = uint16(result.repoArena.len)
           result.repos.add(r)
+          result.repoLens.add(uint8(r.len))
+          for c in r:
+            result.repoArena.add(c)
         else:
           repoMap[i] = uint8(found)
+          repoOffsetMap[i] = repoOffsetMap[found]
 
       let baseOffset = uint32(result.textArena.len)
       for c in msg.textChunk:
         result.textArena.add(c)
 
-      for i in 0 ..< msg.soa.locators.len:
-        let absLoc = baseOffset + msg.soa.locators[i]
+      for i in 0 ..< msg.soa.hot.locators.len:
+        let absLoc = baseOffset + msg.soa.hot.locators[i]
 
-        result.soa.locators.add(absLoc)
-        result.soa.nameLens.add(msg.soa.nameLens[i])
-        result.soa.verLens.add(msg.soa.verLens[i])
-        result.soa.repoIndices.add(repoMap[msg.soa.repoIndices[i]])
-        result.soa.flags.add(msg.soa.flags[i])
+        result.soa.hot.locators.add(absLoc)
+        result.soa.hot.nameLens.add(msg.soa.hot.nameLens[i])
+        result.soa.hot.nameHash.add(msg.soa.hot.nameHash[i])
+        result.soa.cold.verLens.add(msg.soa.cold.verLens[i])
+        result.soa.cold.repoIndices.add(repoMap[msg.soa.cold.repoIndices[i]])
+        result.soa.cold.flags.add(msg.soa.cold.flags[i])
+        result.repoOffsets.add(repoOffsetMap[msg.soa.cold.repoIndices[i]])
 
-      let requiredWords = (result.soa.locators.len + 63) div 64
+      let requiredWords = (result.soa.hot.locators.len + 63) div 64
       if result.selectionBits.len < requiredWords:
         result.selectionBits.setLen(requiredWords)
 
@@ -150,10 +159,35 @@ proc update*(state: AppState, msg: Msg, listHeight: int): AppState =
       result.repos = msg.repos
       result.dataSearchId = msg.searchId
 
-      result.selectionBits.setLen((result.soa.locators.len + 63) div 64)
+      result.selectionBits.setLen((result.soa.hot.locators.len + 63) div 64)
       for i in 0 ..< result.selectionBits.len:
         result.selectionBits[i] = 0
       result.detailsCache.clear()
+
+      result.repoArena.setLen(0)
+      result.repoLens.setLen(0)
+      result.repoOffsets.setLen(result.soa.hot.locators.len)
+
+      var repoOffsetMap: array[256, uint16]
+      for i in 0 ..< 256:
+        repoOffsetMap[i] = 0xFFFF
+
+      for i in 0 ..< result.soa.hot.locators.len:
+        let repoIdx = int(result.soa.cold.repoIndices[i])
+        if repoIdx < result.repos.len and repoOffsetMap[repoIdx] == 0xFFFF:
+          repoOffsetMap[repoIdx] = uint16(result.repoArena.len)
+          result.repoLens.add(uint8(result.repos[repoIdx].len))
+          for c in result.repos[repoIdx]:
+            result.repoArena.add(c)
+        if repoIdx < 256:
+          result.repoOffsets[i] = repoOffsetMap[repoIdx]
+        else:
+          result.repoOffsets[i] = 0
+
+      if result.soa.hot.nameHash.len != result.soa.hot.locators.len:
+        for i in 0 ..< result.soa.hot.locators.len:
+          let nameStr = result.getName(i)
+          result.soa.hot.nameHash.add(hashName(nameStr))
 
       if result.dataSource == SourceSystem and result.searchMode == ModeLocal:
         result.systemDB.soa = result.soa

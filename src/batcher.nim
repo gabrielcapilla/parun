@@ -1,5 +1,5 @@
 import std/[tables, monotimes, times]
-import types
+import types, pUtils
 
 type BatchBuilder* = object
   soa*: PackageSOA
@@ -8,11 +8,12 @@ type BatchBuilder* = object
   repoMap*: Table[string, uint8]
 
 func initBatchBuilder*(): BatchBuilder =
-  result.soa.locators = newSeqOfCap[uint32](1000)
-  result.soa.nameLens = newSeqOfCap[uint8](1000)
-  result.soa.verLens = newSeqOfCap[uint8](1000)
-  result.soa.repoIndices = newSeqOfCap[uint8](1000)
-  result.soa.flags = newSeqOfCap[uint8](1000)
+  result.soa.hot.locators = newSeqOfCap[uint32](1000)
+  result.soa.hot.nameLens = newSeqOfCap[uint8](1000)
+  result.soa.hot.nameHash = newSeqOfCap[uint32](1000)
+  result.soa.cold.verLens = newSeqOfCap[uint8](1000)
+  result.soa.cold.repoIndices = newSeqOfCap[uint8](1000)
+  result.soa.cold.flags = newSeqOfCap[uint8](1000)
 
   result.textChunk = newStringOfCap(BatchSize)
   result.repos = @[]
@@ -21,7 +22,7 @@ func initBatchBuilder*(): BatchBuilder =
 proc flushBatch*(
     bb: var BatchBuilder, resChan: var Channel[Msg], searchId: int, startTime: MonoTime
 ) =
-  if bb.soa.locators.len > 0:
+  if bb.soa.hot.locators.len > 0:
     let dur = (getMonoTime() - startTime).inMilliseconds.int
     resChan.send(
       Msg(
@@ -35,11 +36,12 @@ proc flushBatch*(
       )
     )
 
-    bb.soa.locators.setLen(0)
-    bb.soa.nameLens.setLen(0)
-    bb.soa.verLens.setLen(0)
-    bb.soa.repoIndices.setLen(0)
-    bb.soa.flags.setLen(0)
+    bb.soa.hot.locators.setLen(0)
+    bb.soa.hot.nameLens.setLen(0)
+    bb.soa.hot.nameHash.setLen(0)
+    bb.soa.cold.verLens.setLen(0)
+    bb.soa.cold.repoIndices.setLen(0)
+    bb.soa.cold.flags.setLen(0)
 
     bb.textChunk.setLen(0)
     bb.repos.setLen(0)
@@ -64,8 +66,9 @@ func addPackage*(bb: var BatchBuilder, name, ver, repo: string, installed: bool)
   bb.textChunk.add(name)
   bb.textChunk.add(ver)
 
-  bb.soa.locators.add(offset)
-  bb.soa.nameLens.add(uint8(name.len))
-  bb.soa.verLens.add(uint8(ver.len))
-  bb.soa.repoIndices.add(rIdx)
-  bb.soa.flags.add(if installed: 1 else: 0)
+  bb.soa.hot.locators.add(offset)
+  bb.soa.hot.nameLens.add(uint8(name.len))
+  bb.soa.hot.nameHash.add(hashName(name))
+  bb.soa.cold.verLens.add(uint8(ver.len))
+  bb.soa.cold.repoIndices.add(rIdx)
+  bb.soa.cold.flags.add(if installed: 1 else: 0)
