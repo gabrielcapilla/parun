@@ -36,63 +36,72 @@ func appendRow(
   let tagW = if isInstalled: InstalledLen else: 0
   let maxTextW = max(0, width - PrefixLen - tagW)
 
-  var dRepo = state.getRepo(i)
-  var dName = state.getName(i)
-  var dVer = state.getVersion(i)
+  let repoLen = state.getRepoLen(i)
+  let nameLen = state.getNameLen(i)
+  let verLen = state.getVersionLen(i)
 
-  let currentLen = dRepo.len + 1 + dName.len + 1 + dVer.len
-  if currentLen > maxTextW:
-    let repoNameLen = dRepo.len + 1 + dName.len
-    if repoNameLen + 1 < maxTextW:
-      let roomForVer = maxTextW - repoNameLen - 1
-      dVer =
-        if roomForVer > 0:
-          dVer[0 ..< min(dVer.len, roomForVer)]
-        else:
-          ""
+  var printRepoLen = repoLen
+  var printNameLen = nameLen
+  var printVerLen = verLen
+  var hasSlash = (nameLen > 0)
+  var hasSpace = (verLen > 0)
+
+  let totalNeeded =
+    repoLen + (if hasSlash: 1 else: 0) + nameLen + (if hasSpace: 1 else: 0) + verLen
+
+  if totalNeeded > maxTextW:
+    let repoNameLen = repoLen + (if hasSlash: 1 else: 0) + nameLen
+    if repoNameLen + (if hasSpace: 1 else: 0) < maxTextW:
+      let roomForVer = maxTextW - repoNameLen - (if hasSpace: 1 else: 0)
+      printVerLen = max(0, roomForVer)
+      if printVerLen == 0:
+        hasSpace = false
     else:
-      dVer = ""
-      let roomForName = maxTextW - dRepo.len - 1
+      printVerLen = 0
+      hasSpace = false
+      let roomForName = maxTextW - repoLen - (if hasSlash: 1 else: 0)
       if roomForName > 0:
-        dName = dName[0 ..< min(dName.len, roomForName)]
+        printNameLen = min(nameLen, roomForName)
       else:
-        dName = ""
-        dRepo = dRepo[0 ..< min(dRepo.len, maxTextW)]
+        printNameLen = 0
+        hasSlash = false
+        printRepoLen = min(repoLen, maxTextW)
 
   let styleIdx = (isCursor.int shl 1) or isSelected.int
-
   buffer.add(PrefixLUT[styleIdx])
 
   if isCursor:
-    buffer.add(dRepo)
-    if dName.len > 0:
+    state.appendRepo(i, buffer, printRepoLen)
+    if hasSlash:
       buffer.add(SepSlash)
-      buffer.add(dName)
-    if dVer.len > 0:
+      state.appendName(i, buffer, printNameLen)
+    if hasSpace:
       buffer.add(Space)
-      buffer.add(dVer)
+      state.appendVersion(i, buffer, printVerLen)
   else:
     buffer.add(ColorRepo)
-    buffer.add(dRepo)
+    state.appendRepo(i, buffer, printRepoLen)
     buffer.add(Reset)
-    if dName.len > 0:
+
+    if hasSlash:
       buffer.add(SepSlash)
       buffer.add(ColorPkg)
       buffer.add(AnsiBold)
-      buffer.add(dName)
+      state.appendName(i, buffer, printNameLen)
       buffer.add(Reset)
-    if dVer.len > 0:
+
+    if hasSpace:
       buffer.add(Space)
       buffer.add(ColorVer)
-      buffer.add(dVer)
+      state.appendVersion(i, buffer, printVerLen)
       buffer.add(Reset)
 
   if isInstalled:
     buffer.add(InstalledTag)
 
   let usedLen =
-    PrefixLen + dRepo.len + (if dName.len > 0: 1 + dName.len else: 0) +
-    (if dVer.len > 0: 1 + dVer.len else: 0) + tagW
+    PrefixLen + printRepoLen + (if hasSlash: 1 else: 0) + printNameLen +
+    (if hasSpace: 1 else: 0) + printVerLen + tagW
   let pad = max(0, width - usedLen)
 
   if pad > 0:
@@ -202,7 +211,7 @@ func renderUi*(state: AppState, buffer: var string, termH, termW: int): RenderRe
     return (0, 0)
 
   let listH = max(1, termH - 2)
-  let showDetails = state.showDetails and (termW >= 90)
+  let showDetails = state.showDetails
   let listW =
     if showDetails:
       termW div 2
