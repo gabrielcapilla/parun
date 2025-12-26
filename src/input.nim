@@ -5,7 +5,7 @@ func deleteCharLeft(state: var AppState) =
   if state.searchCursor > 0:
     state.searchBuffer.delete(state.searchCursor - 1 .. state.searchCursor - 1)
     state.searchCursor.dec()
-    state.visibleIndices = filterIndices(state, state.searchBuffer)
+    filterIndices(state, state.searchBuffer, state.visibleIndices)
     state.cursor = 0
 
 func deleteWordLeft(state: var AppState) =
@@ -58,13 +58,13 @@ func deleteWordLeft(state: var AppState) =
   if wordStart < originalCursor:
     state.searchBuffer.delete(wordStart .. originalCursor - 1)
     state.searchCursor = wordStart
-    state.visibleIndices = filterIndices(state, state.searchBuffer)
+    filterIndices(state, state.searchBuffer, state.visibleIndices)
     state.cursor = 0
 
 func deleteCharRight(state: var AppState) =
   if state.searchCursor < state.searchBuffer.len:
     state.searchBuffer.delete(state.searchCursor .. state.searchCursor)
-    state.visibleIndices = filterIndices(state, state.searchBuffer)
+    filterIndices(state, state.searchBuffer, state.visibleIndices)
     state.cursor = 0
 
 func insertChar(state: var AppState, c: char) =
@@ -72,7 +72,7 @@ func insertChar(state: var AppState, c: char) =
     state.viewingSelection = false
   state.searchBuffer.insert($c, state.searchCursor)
   state.searchCursor.inc()
-  state.visibleIndices = filterIndices(state, state.searchBuffer)
+  filterIndices(state, state.searchBuffer, state.visibleIndices)
   state.cursor = 0
 
 func moveCursorWordLeft(state: var AppState) =
@@ -163,7 +163,7 @@ func handleVimNormal(state: var AppState, k: char, listHeight: int) =
   of '/':
     state.searchBuffer = ""
     state.searchCursor = 0
-    state.visibleIndices = filterIndices(state, "")
+    filterIndices(state, "", state.visibleIndices)
     state.inputMode = ModeVimInsert
   of ':':
     state.commandBuffer = ""
@@ -178,14 +178,14 @@ func handleVimNormal(state: var AppState, k: char, listHeight: int) =
     if state.searchBuffer.len > 0:
       state.searchBuffer = ""
       state.searchCursor = 0
-      state.visibleIndices = filterIndices(state, "")
+      filterIndices(state, "", state.visibleIndices)
     elif state.viewingSelection:
       state.viewingSelection = false
-      state.visibleIndices = filterIndices(state, "")
+      filterIndices(state, "", state.visibleIndices)
   else:
     discard
 
-proc handleVimInsert(state: var AppState, k: char, listHeight: int) =
+func handleVimInsert(state: var AppState, k: char, listHeight: int) =
   case k
   of KeyEsc:
     state.inputMode = ModeVimNormal

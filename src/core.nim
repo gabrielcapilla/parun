@@ -7,11 +7,10 @@ proc processInput*(state: var AppState, k: char, listHeight: int) =
       state.viewingSelection = not state.viewingSelection
       state.cursor = 0
       state.scroll = 0
-      state.visibleIndices =
-        if state.viewingSelection:
-          filterBySelection(state)
-        else:
-          filterIndices(state, state.searchBuffer)
+      if state.viewingSelection:
+        filterBySelection(state, state.visibleIndices)
+      else:
+        filterIndices(state, state.searchBuffer, state.visibleIndices)
       return
 
     if k == KeyF1:
@@ -42,7 +41,7 @@ proc processInput*(state: var AppState, k: char, listHeight: int) =
       elif state.dataSource == SourceSystem and state.searchMode != state.baseSearchMode:
         restoreBaseState(state)
 
-      state.visibleIndices = filterIndices(state, state.searchBuffer)
+      filterIndices(state, state.searchBuffer, state.visibleIndices)
       state.debouncePending = false
       state.statusMessage = ""
 
@@ -72,7 +71,7 @@ proc update*(state: AppState, msg: Msg, listHeight: int): AppState =
 
           requestSearch(queryToSend, result.searchId)
         else:
-          result.visibleIndices = @[]
+          result.visibleIndices.setLen(0)
           result.statusMessage = "Type to search AUR..."
   of MsgSearchResults:
     if msg.searchId != result.searchId:
@@ -134,7 +133,7 @@ proc update*(state: AppState, msg: Msg, listHeight: int): AppState =
         result.nimbleDB.isLoaded = true
 
       if not result.viewingSelection:
-        result.visibleIndices = filterIndices(result, result.searchBuffer)
+        filterIndices(result, result.searchBuffer, result.visibleIndices)
 
       if result.visibleIndices.len > 0:
         result.cursor = clamp(result.cursor, 0, result.visibleIndices.len - 1)
@@ -173,7 +172,7 @@ proc update*(state: AppState, msg: Msg, listHeight: int): AppState =
         result.nimbleDB.isLoaded = true
 
       if not result.viewingSelection:
-        result.visibleIndices = filterIndices(result, result.searchBuffer)
+        filterIndices(result, result.searchBuffer, result.visibleIndices)
       result.cursor = 0
       result.scroll = 0
       if result.visibleIndices.len == 0 and result.dataSource == SourceNimble and
