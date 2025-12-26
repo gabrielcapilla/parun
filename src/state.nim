@@ -224,7 +224,7 @@ proc initPackageDB(): PackageDB =
   )
 
 proc newState*(
-    initialMode: SearchMode, initialShowDetails: bool, useVim: bool, startNimble: bool
+    initialMode: SearchMode, initialShowDetails: bool, startNimble: bool
 ): AppState =
   let ds = if startNimble: SourceNimble else: SourceSystem
   AppState(
@@ -241,7 +241,7 @@ proc newState*(
     cursor: 0,
     scroll: 0,
     searchBuffer: "",
-    commandBuffer: "",
+    searchCursor: 0,
     searchMode: initialMode,
     dataSource: ds,
     baseSearchMode: initialMode,
