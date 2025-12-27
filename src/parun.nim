@@ -1,5 +1,6 @@
 import std/[terminal, os, selectors, posix, strutils, parseopt, tables, bitops]
-import types, core, tui, pkgManager, terminal as term, state, keyboard
+import terminal as term, state, keyboard
+import types, core, tui, pkgManager
 
 proc main() =
   var
