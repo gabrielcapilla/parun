@@ -1,129 +1,105 @@
-**Parun** is an elegant and efficient Terminal UI (TUI) for managing packages on Arch-based Linux systems, like CachyOS, Manjaro or Arch Linux. Written in [Nim](https://nim-lang.org/), it acts as a visual interface for `pacman`, `paru`, or `yay`, simplifying the process of searching, installing, and uninstalling packages from official repositories, the AUR (Arch User Repository), and Nimble (the Nim package manager).
+# Parun
 
----
+**Parun** is a modern, high-performance Terminal User Interface (TUI) for package management, designed for **Arch Linux** and the **Nim** ecosystem.
 
-## Features
+<div align="center">
+  <img src="preview.webp" alt="Example output of Parun" width="500"/>
+  <br>
+</div>
 
-- **Intuitive TUI Interface:** Visual interaction directly within the terminal.
-- **Multi-Manager Compatibility:**
-  - Supports `paru`, `yay`, and `pacman` as backends.
-- **AUR Support:** Switch between Local (official repos only) and Local+AUR mode.
-- **Detailed View:** Inspect detailed information about selected packages.
-- **Bulk Selection:** Mark multiple packages for concurrent installation or removal.
-- **Live Search:** Filter packages in real-time as you type in the search field.
-- **Optional Vim Mode:** Vim-style keyboard shortcuts for navigation and editing.
-- **Nimble Support:** Browse and install Nim packages directly from the TUI.
+Written in [Nim](https://github.com/nim-lang/Nim) and optimized with SIMD instructions, Parun offers a blazing fast search and management experience for Pacman, AUR (Arch User Repository), and Nimble repositories.
 
----
+## Key Features
 
-## Prerequisites
+- **Extreme Performance**: Uses `nimsimd` for hardware-accelerated text filtering and searching.
+- **Unified Management**: Manage system packages (Pacman), community packages (AUR), and Nim language packages (Nimble) from a single interface.
+- **Multi-Selection**: Select multiple packages to install or uninstall in batches.
+- **Intuitive Interface**: Real-time searching, package details view, and fluid keyboard navigation.
+- **Details Mode**: View extended package information (version, description, license, etc.).
 
-- An Arch-based Linux distribution (the `pacman` package manager must be available).
-- `nim >= 2.2.6`
-- `nimsimd >= 1.3.2`
+## Requirements
+
+- **OS**: Arch Linux or Arch Linux based distro
+- **Nim**: [Install Nim](https://nim-lang.org/)
 
 ## Installation
 
-### Install using Nimble via GitHub
+The easiest way to install Parun is using `nimble`:
 
 ```bash
 nimble install https://github.com/gabrielcapilla/parun.git
 ```
 
-### Build
+## Build
 
-1. Clone this repository:
+If you wish to manually compile the project from source or generate an optimized release version:
 
-   ```bash
-   git clone https://github.com/gabrielcapilla/parun.git
-   cd parun
-   ```
+1.  Clone the repository:
 
-2. Install:
+    ```bash
+    git clone https://github.com/gabrielcapilla/parun.git
+    cd parun
+    ```
 
-   ```bash
-   nimble install
-   ```
+2.  Run the defined build task (requires `nimble`):
 
-3. Optionally, you can build in "release" mode for better performance. This builds in release mode as defined in the .nimble file and installs the binary in `$HOME/.local/bin`
+    ```bash
+    nimble release
+    ```
 
-   ```bash
-   nimble release
-   ```
-
-4. To run it directly from the terminal:
-   ```bash
-   parun
-   ```
-
----
+3.  Install in your local folder bin:
+    ```bash
+    mv parun $HOME/.local/bin
+    ```
 
 ## Usage
 
+To start the application, simply run:
+
 ```bash
-parun [options]
+parun
 ```
 
-### Options
+### Command Line Options
 
-- `--aur`: Start in _Local+AUR_ mode.
-- `--noinfo`: Do not show the detailed package information panel.
-- `--vim`: Enable Vim-style mode.
-- `--nimble`: Start displaying Nimble packages instead of system packages.
+You can launch Parun in specific modes or with initial configurations:
 
-### Keyboard Shortcuts
+| Option              | Description                                   |
+| :------------------ | :-------------------------------------------- |
+| `-n`, `--noinfo`    | Start with the package details panel hidden.  |
+| `--nim`, `--nimble` | Start directly in Nimble package search mode. |
 
-#### Standard Mode
+### Keyboard Shortcuts & Controls
 
-| Action                        | Key(s)                   |
-| ----------------------------- | ------------------------ |
-| Move cursor up                | `↑`                      |
-| Move cursor down              | `↓`                      |
-| Next page                     | `PgDown`                 |
-| Previous page                 | `PgUp`                   |
-| Toggle details panel          | `F1`                     |
-| Type to search packages       | Type in the `>` prompt   |
-| Insert/Delete character       | Normal keys              |
-| Backspace                     | `Backspace` or `Del`     |
-| Select packages               | `Tab`                    |
-| Install selected package(s)   | `Enter`                  |
-| Uninstall selected package(s) | `Ctrl+R`                 |
-| Toggle between Local/AUR      | `Ctrl+A`                 |
-| Toggle Selection/Normal view  | `Ctrl+S`                 |
-| Quit                          | `Esc` or `Alt+Backspace` |
+Once inside the application, use the following controls to navigate and manage packages:
 
-#### Vim Mode (`--vim`)
+**Navigation & Search**
 
-| Action                         | Mode              | Command              |
-| ------------------------------ | ----------------- | -------------------- |
-| Move cursor up                 | Normal            | `k` or `↑`           |
-| Move cursor down               | Normal            | `j` or `↓`           |
-| Next page                      | Normal            | `Ctrl+D` or `PgDown` |
-| Previous page                  | Normal            | `Ctrl+U` or `PgUp`   |
-| Go to top                      | Normal            | `g` or `Home`        |
-| Go to bottom                   | Normal            | `G` or `End`         |
-| Scroll details up              | Normal            | `Ctrl+Y`             |
-| Scroll details down            | Normal            | `Ctrl+E`             |
-| Toggle details panel           | Normal            | `F1`                 |
-| Enter insert mode (search)     | Normal            | `i` or `/`           |
-| Enter command mode (e.g. `:q`) | Normal            | `:`                  |
-| Select package                 | Normal            | `<Space>`            |
-| Install package                | Normal            | `Enter`              |
-| Uninstall package              | Normal            | `x`                  |
-| Toggle between Local/AUR       | Normal            | `Ctrl+A`             |
-| Toggle Selection/Normal view   | Normal            | `Ctrl+S`             |
-| Quit                           | Normal or Command | `:q` or `:q!`        |
+- **Typing**: Filter the package list in real-time.
+- **Up / Down Arrows**: Move the cursor through the package list.
+- **PgUp / PgDn**: Scroll by pages.
+- **F1**: Show/Hide the package details panel.
+- **Esc**: Quit the application.
+
+**Package Management**
+
+- **Tab**: Select/Deselect the current package (for multi-selection).
+- **Enter**: Install selected packages (or the current one if no selection).
+- **Ctrl + R**: Uninstall (Remove) selected packages.
+- **Ctrl + S**: Toggle view to show only selected packages.
+
+**Quick Search Commands**
+You can switch package sources by typing special prefixes in the search bar:
+
+- `aur/` : Switch to AUR search.
+- `nim/` or `nimble/` : Switch to Nimble search.
+- Any other input returns to the default mode (System Packages/Local).
 
 ---
 
-## Configuration
+_Parun does not require an external configuration file. However, it internally interacts with `pacman`, `paru`, `yay`, and `nimble` commands. Ensure these are installed._
 
-Parun does not require an external configuration file. However, it internally interacts with `pacman`, `paru`, `yay`, and `nimble` commands. Ensure these are installed.
-
-### Relevant Environment Variables
-
-- `$PACMAN`: The primary package manager (usually `pacman`, `paru`, or `yay`). Parun detects it automatically.
-- `$HOME/.nimble/packages_official.json`: Required by `--nimble` mode. Can be created with `nimble refresh`.
+---
 
 ## Repository & Support
 
