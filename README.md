@@ -3,7 +3,7 @@
 **Parun** is a modern, high-performance Terminal User Interface (TUI) for package management, designed for **Arch Linux** and the **Nim** ecosystem.
 
 <div align="center">
-  <img src="preview.webp" alt="Example output of Parun" width="500"/>
+  <img src="preview.webp" alt="Example output of Parun"/>
   <br>
 </div>
 
