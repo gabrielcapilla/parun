@@ -1,7 +1,12 @@
+## Orchestrates state updates (`update`) and input processing.
+## Handles asynchronous result reception and integration into SoA.
+
 import std/[tables, strutils, monotimes, times]
 import types, state, input, pkgManager
 
 proc processInput*(state: var AppState, k: char, listHeight: int) =
+  ## Processes a key press and updates state.
+  ## Handles global commands (F1, Ctrl+S) and editing delegates.
   if k == KeyCtrlS:
     state.viewingSelection = not state.viewingSelection
     state.cursor = 0
@@ -19,6 +24,7 @@ proc processInput*(state: var AppState, k: char, listHeight: int) =
   handleInput(state, k, listHeight)
   state.lastInputTime = getMonoTime()
 
+  # Magic command detection (aur/, nimble/)
   if not state.viewingSelection:
     let isNimbleQuery =
       state.searchBuffer.startsWith("nimble/") or state.searchBuffer.startsWith("nim/")
@@ -40,6 +46,8 @@ proc processInput*(state: var AppState, k: char, listHeight: int) =
     state.statusMessage = ""
 
 proc update*(state: AppState, msg: Msg, listHeight: int): AppState =
+  ## Returns new state based on a message.
+  ## In practice, modifies `state` in-place for performance and returns it.
   result = state
   result.needsRedraw = true
 
@@ -47,6 +55,7 @@ proc update*(state: AppState, msg: Msg, listHeight: int): AppState =
   of MsgInput:
     processInput(result, msg.key, listHeight)
   of MsgTick:
+    # Debounce logic for remote search (AUR/Nimble)
     if result.debouncePending:
       if (getMonoTime() - result.lastInputTime).inMilliseconds > 500:
         result.debouncePending = false
@@ -64,12 +73,15 @@ proc update*(state: AppState, msg: Msg, listHeight: int): AppState =
             if result.searchMode == ModeAUR:
               result.statusMessage = "Type to search AUR..."
   of MsgSearchResults:
+    # Integration of asynchronous results into main SoA
     if msg.searchId != result.searchId:
       return result
     result.statusMessage = ""
 
     if msg.isAppend:
+      # Append Mode: Add to existing data (initial load)
       if result.dataSearchId != msg.searchId:
+        # New search detected, clear everything
         result.soa.hot.locators.setLen(0)
         result.soa.hot.nameLens.setLen(0)
         result.soa.cold.verLens.setLen(0)
@@ -81,6 +93,7 @@ proc update*(state: AppState, msg: Msg, listHeight: int): AppState =
         result.detailsCache.clear()
         result.dataSearchId = msg.searchId
 
+      # Map message repositories to local repositories
       var repoMap = newSeq[uint8](msg.repos.len)
       var repoOffsetMap = newSeq[uint16](msg.repos.len)
       var repoLookup = initTable[string, uint8]()
@@ -99,10 +112,12 @@ proc update*(state: AppState, msg: Msg, listHeight: int): AppState =
           for c in r:
             result.repoArena.add(c)
 
+      # Bulk copy text to main arena
       let baseOffset = uint32(result.textArena.len)
       for c in msg.textChunk:
         result.textArena.add(c)
 
+      # Integrate SoA metadata
       for i in 0 ..< msg.soa.hot.locators.len:
         let absLoc = baseOffset + msg.soa.hot.locators[i]
 
@@ -113,10 +128,12 @@ proc update*(state: AppState, msg: Msg, listHeight: int): AppState =
         result.soa.cold.flags.add(msg.soa.cold.flags[i])
         result.repoOffsets.add(repoOffsetMap[msg.soa.cold.repoIndices[i]])
 
+      # Resize selection bitset if needed
       let requiredWords = (result.soa.hot.locators.len + 63) div 64
       if result.selectionBits.len < requiredWords:
         result.selectionBits.setLen(requiredWords)
 
+      # Mark DB as loaded
       if result.dataSource == SourceSystem and result.searchMode == ModeLocal:
         result.systemDB.soa = result.soa
         result.systemDB.textArena = result.textArena
@@ -148,6 +165,7 @@ proc update*(state: AppState, msg: Msg, listHeight: int): AppState =
         if result.dataSource == SourceNimble and result.searchBuffer.len > 0:
           result.statusMessage = "No results in Nimble"
     else:
+      # Replace Mode (Direct search, e.g., pacman -Ss)
       result.soa = msg.soa
       result.textArena = newSeqOfCap[char](msg.textChunk.len)
       for c in msg.textChunk:
