@@ -208,7 +208,7 @@ proc saveCurrentToDB*(state: var AppState) =
     state.nimbleDB.repos = state.repos
     state.nimbleDB.repoArena = state.repoArena
     state.nimbleDB.repoLens = state.repoLens
-    state.nimbleDB.repoOffsets = state.nimbleDB.repoOffsets
+    state.nimbleDB.repoOffsets = state.repoOffsets
     state.nimbleDB.isLoaded = true
 
 proc loadFromDB*(state: var AppState, source: DataSource) =
