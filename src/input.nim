@@ -1,7 +1,11 @@
+## Implements search bar editing logic (insertion, deletion, word navigation)
+## and package list navigation.
+
 import std/strutils
 import types, state
 
 func deleteCharLeft(state: var AppState) =
+  ## Deletes the character to the left of the cursor.
   if state.searchCursor > 0:
     state.searchBuffer.delete(state.searchCursor - 1 .. state.searchCursor - 1)
     state.searchCursor.dec()
@@ -9,6 +13,7 @@ func deleteCharLeft(state: var AppState) =
     state.cursor = 0
 
 func deleteWordLeft(state: var AppState) =
+  ## Deletes the whole word to the left (Ctrl+Backspace).
   if state.searchCursor == 0:
     return
 
@@ -62,12 +67,14 @@ func deleteWordLeft(state: var AppState) =
     state.cursor = 0
 
 func deleteCharRight(state: var AppState) =
+  ## Deletes the character to the right of the cursor (Del).
   if state.searchCursor < state.searchBuffer.len:
     state.searchBuffer.delete(state.searchCursor .. state.searchCursor)
     filterIndices(state, state.searchBuffer, state.visibleIndices)
     state.cursor = 0
 
 func insertChar(state: var AppState, c: char) =
+  ## Inserts a character at the current cursor position.
   if state.viewingSelection:
     state.viewingSelection = false
   state.searchBuffer.insert($c, state.searchCursor)
@@ -76,6 +83,7 @@ func insertChar(state: var AppState, c: char) =
   state.cursor = 0
 
 func moveCursorWordLeft(state: var AppState) =
+  ## Moves cursor to the beginning of the previous word.
   if state.searchCursor > 0:
     while state.searchCursor > 0 and state.searchBuffer[state.searchCursor - 1] == ' ':
       state.searchCursor.dec()
@@ -84,6 +92,7 @@ func moveCursorWordLeft(state: var AppState) =
       state.searchCursor.dec()
 
 func moveCursorWordRight(state: var AppState) =
+  ## Moves cursor to the beginning of the next word.
   var foundWord = false
 
   while state.searchCursor < state.searchBuffer.len and
@@ -100,6 +109,7 @@ func moveCursorWordRight(state: var AppState) =
       state.searchCursor.dec()
 
 func handleInput*(state: var AppState, k: char, listHeight: int) =
+  ## Main keyboard event dispatcher.
   case k
   of KeyUp:
     if state.visibleIndices.len > 0:
@@ -147,6 +157,7 @@ func handleInput*(state: var AppState, k: char, listHeight: int) =
     if k.ord >= 32 and k.ord <= 126:
       insertChar(state, k)
 
+  # Scroll adjustment to keep cursor visible
   if state.visibleIndices.len > 0:
     state.cursor = clamp(state.cursor, 0, state.visibleIndices.len - 1)
     if state.cursor < state.scroll:
