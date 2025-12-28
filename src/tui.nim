@@ -183,7 +183,11 @@ func renderStatusBar(buffer: var string, state: AppState, termW: int): int =
     modeStr.add(fmt" {AnsiBold}{state.statusMessage}{AnsiReset}")
 
   let leftSide = fmt"{ColorPrompt}>{AnsiReset} {state.searchBuffer}"
-  let cursorVisualX = 2 + visibleWidth(state.searchBuffer[0 ..< state.searchCursor])
+  let cursorVisualX =
+    if state.searchBuffer.len > 0 and state.searchCursor > 0:
+      2 + visibleWidth(state.searchBuffer[0 ..< state.searchCursor])
+    else:
+      2
 
   let leftSideClean = "> " & state.searchBuffer
   let rightSide = fmt"{statusPrefix}{modeStr} {pkgCountStr}"
