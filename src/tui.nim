@@ -1,3 +1,6 @@
+## Generates the character buffer to draw the interface.
+## Optimized to minimize writes to STDOUT (Implicit Double Buffering).
+
 import std/[strformat, strutils, tables]
 import types, utils, state
 
@@ -31,6 +34,8 @@ func appendRow(
     width: int,
     isCursor, isSelected: bool,
 ) =
+  ## Renders a single row of the package list.
+  ## Calculates text clipping to fit available width.
   let i = int(idx)
   let isInstalled = state.isInstalled(i)
   let tagW = if isInstalled: InstalledLen else: 0
@@ -117,6 +122,7 @@ func appendRow(
     buffer.add(Reset)
 
 func renderDetails(buffer: var string, state: AppState, r, listH, detailTextW: int) =
+  ## Renders the side details panel.
   if r == 0:
     buffer.add(
       ColorFrame & BoxTopLeft & repeat(BoxHor, detailTextW) & BoxTopRight & Reset
@@ -137,7 +143,7 @@ func renderDetails(buffer: var string, state: AppState, r, listH, detailTextW: i
         if effectiveIdx < dLines.len:
           textContent = dLines[effectiveIdx].replace("\t", "  ")
       elif contentRowIndex == 0:
-        textContent = "Loading..."
+        textContent = "..."
 
     let visLen = visibleWidth(textContent)
     if visLen > detailTextW:
@@ -148,6 +154,7 @@ func renderDetails(buffer: var string, state: AppState, r, listH, detailTextW: i
     buffer.add(ColorFrame & BoxVer & Reset)
 
 func renderStatusBar(buffer: var string, state: AppState, termW: int): int =
+  ## Renders the bottom status and search bar.
   let pkgCountStr =
     if state.soa.hot.locators.len == 0:
       fmt"{AnsiDim}(...){AnsiReset}"
@@ -187,7 +194,8 @@ func renderStatusBar(buffer: var string, state: AppState, termW: int): int =
   buffer.add(rightSide)
   return cursorVisualX
 
-func renderUi*(state: AppState, buffer: var string, termH, termW: int): RenderResult =
+proc renderUi*(state: AppState, buffer: var string, termH, termW: int): RenderResult =
+  ## Main rendering function. Fills the buffer with the complete frame.
   buffer.setLen(0)
   if termW < MinTermWidth or termH < MinTermHeight:
     buffer.add("\e[2J\e[H" & fmt"{AnsiBold}Terminal size too small.{AnsiReset}")
