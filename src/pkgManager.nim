@@ -1,3 +1,9 @@
+## Thread dedicated to blocking operations (I/O, Network, Subprocess execution).
+## Abstracts differences between Pacman, Paru, Yay and Nimble.
+
+# This module is very extensive and has a lot of features.
+# I should make an effort to divide the code and even create new modules.
+
 import
   std/[
     os, osproc, strutils, strformat, tables, streams, sets, parsejson, monotimes,
@@ -70,6 +76,7 @@ const
     "https://raw.githubusercontent.com/nim-lang/packages/refs/heads/master/packages.json"
   CacheMaxAgeHours* = 24
 
+## Definition of a cacheable JSON data source.
 type CachedJsonSource* = object
   localFallbackPath*: string
   cachePath*: string
@@ -84,12 +91,16 @@ var
   activeTool*: PkgManagerType
 
 proc downloadJsonToCache*(url, cachePath: string): bool =
+  ## Downloads a JSON file using curl.
+  # Maybe I need to use `execProcess` or `startProcess`
+  # Or try native libs like http?
   let cmd = "curl -s -L -o " & cachePath & " " & url
   return execCmd(cmd) == 0
 
 proc getFreshJsonPath*(
     source: CachedJsonSource
 ): tuple[path: string, wasDownloaded: bool] =
+  ## Gets path to a valid JSON, downloading if necessary or if cache expired.
   let cacheDir = getHomeDir() / ".cache/parun"
   createDir(cacheDir)
 
@@ -123,6 +134,7 @@ proc getFreshJsonPath*(
   return (bestPath, wasDownloaded)
 
 proc skipJsonBlock(p: var JsonParser) =
+  ## Skips a full JSON block (object or array) efficiently.
   var depth = 1
   while depth > 0:
     p.next()
@@ -137,6 +149,7 @@ proc skipJsonBlock(p: var JsonParser) =
       discard
 
 proc workerLoop(toolType: PkgManagerType) {.thread.} =
+  ## Main loop of the worker thread.
   var currentReq: WorkerReq
   var hasReq = false
   var nimbleMetaCache = initTable[string, NimbleMeta]()
@@ -156,6 +169,7 @@ proc workerLoop(toolType: PkgManagerType) {.thread.} =
         client.close()
         break
       of ReqLoadAll:
+        # Load system packages (pacman -Sl)
         let tStart = getMonoTime()
         let (instOut, _) = execCmdEx("pacman -Q")
         let instMap = parseInstalledPackages(instOut)
@@ -200,6 +214,7 @@ proc workerLoop(toolType: PkgManagerType) {.thread.} =
         if not interrupted:
           flushBatch(bb, resChan, req.searchId, tStart)
       of ReqLoadNimble:
+        # Load Nimble packages from JSON
         let tStart = getMonoTime()
         var installedSet = initHashSet[string]()
         let (listOut, _) = execCmdEx("nimble list -i --noColor")
@@ -294,6 +309,7 @@ proc workerLoop(toolType: PkgManagerType) {.thread.} =
         if not interrupted:
           flushBatch(bb, resChan, req.searchId, tStart)
       of ReqLoadAur:
+        # Load AUR packages from compressed JSON
         let tStart = getMonoTime()
         let aurSource = CachedJsonSource(
           localFallbackPath: "",
@@ -371,6 +387,7 @@ proc workerLoop(toolType: PkgManagerType) {.thread.} =
         if not interrupted:
           flushBatch(bb, resChan, req.searchId, tStart)
       of ReqSearch:
+        # Direct search (fallback for pacman -Ss)
         let tStart = getMonoTime()
         let (instOut, _) = execCmdEx("pacman -Q")
         let instMap = parseInstalledPackages(instOut)
@@ -397,6 +414,7 @@ proc workerLoop(toolType: PkgManagerType) {.thread.} =
           bb.addPackage(name, ver, repo, instMap.hasKey(name))
         flushBatch(bb, resChan, req.searchId, tStart)
       of ReqDetails:
+        # Load details (pacman -Si / nimble search)
         if req.source == SourceNimble:
           var content = ""
           var fetched = false
@@ -457,6 +475,7 @@ proc workerLoop(toolType: PkgManagerType) {.thread.} =
       resChan.send(Msg(kind: MsgError, errMsg: e.msg))
 
 proc initPackageManager*() =
+  ## Initializes the worker thread and detects package manager (paru/yay/pacman).
   reqChan.open()
   resChan.open()
 
@@ -470,6 +489,7 @@ proc initPackageManager*() =
   createThread(workerThread, workerLoop, activeTool)
 
 proc shutdownPackageManager*() =
+  ## Stops the worker thread and closes channels.
   reqChan.send(WorkerReq(kind: ReqStop))
 
   reqChan.close()
@@ -495,6 +515,7 @@ proc requestDetails*(idx: int32, name, repo: string, source: DataSource) =
   )
 
 proc pollWorkerMessages*(): seq[Msg] =
+  ## Retrieves all pending messages from the worker (non-blocking).
   result = @[]
   while true:
     (let (ok, msg) = resChan.tryRecv(); if not ok: break ; result.add(msg))
@@ -513,9 +534,11 @@ proc runTransaction(tool: PkgManagerType, targets: seq[string], install: bool): 
   return execCmd(cmd)
 
 proc installPackages*(names: seq[string], source: DataSource): int =
+  ## Executes the install command in the main terminal.
   let tool = if source == SourceNimble: ManNimble else: activeTool
   return runTransaction(tool, names, true)
 
 proc uninstallPackages*(names: seq[string], source: DataSource): int =
+  ## Executes the uninstall command in the main terminal.
   let tool = if source == SourceNimble: ManNimble else: activeTool
   return runTransaction(tool, names, false)
