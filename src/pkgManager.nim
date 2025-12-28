@@ -91,11 +91,15 @@ var
   activeTool*: PkgManagerType
 
 proc downloadJsonToCache*(url, cachePath: string): bool =
-  ## Downloads a JSON file using curl.
-  # Maybe I need to use `execProcess` or `startProcess`
-  # Or try native libs like http?
-  let cmd = "curl -s -L -o " & cachePath & " " & url
-  return execCmd(cmd) == 0
+  ## Downloads a JSON file using native httpclient.
+  var client = newHttpClient(timeout = 30_000)
+  try:
+    client.downloadFile(url, cachePath)
+    client.close()
+    return true
+  except Exception:
+    client.close()
+    return false
 
 proc getFreshJsonPath*(
     source: CachedJsonSource
