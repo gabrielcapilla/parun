@@ -1,3 +1,6 @@
+## Sets terminal to "raw" mode (no echo, no line buffering) and
+## handles SIGWINCH signal for resizing.
+
 import std/[posix, termios]
 import types
 
@@ -6,10 +9,12 @@ const SigWinchVal = 28.cint
 var resizePipe*: array[2, cint]
 
 proc handleSigWinch(sig: cint) {.noconv.} =
+  ## Safe signal handler. Writes a byte to the pipe to notify main loop.
   var b: char = 'R'
   discard posix.write(resizePipe[1], addr b, 1)
 
 proc initTerminal*(): Termios =
+  ## Puts terminal in raw mode and sets up signal pipe.
   if posix.pipe(resizePipe) != 0:
     quit("Critical Error: Could not create pipe for signals.")
 
@@ -29,10 +34,12 @@ proc initTerminal*(): Termios =
   var flags = fcntl(STDIN_FILENO, F_GETFL, 0)
   discard fcntl(STDIN_FILENO, F_SETFL, flags or O_NONBLOCK)
 
+  # Alt buffer + Hide cursor
   stdout.write("\e[?1049h\e[?25l")
   stdout.flushFile()
 
 proc restoreTerminal*(origTerm: var Termios) =
+  ## Restores original terminal configuration.
   stdout.write("\e[?1049l\e[?25h" & AnsiReset)
   discard tcSetAttr(STDIN_FILENO, TCSAFLUSH, addr origTerm)
 
