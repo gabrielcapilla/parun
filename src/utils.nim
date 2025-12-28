@@ -1,6 +1,10 @@
-import std/unicode
+## Helper functions for string manipulation with Unicode and ANSI support.
 
-func stripAnsi*(s: string): string =
+import std/unicode
+import types
+
+func stripAnsi*(s: string): string {.noSideEffect.} =
+  ## Removes ANSI escape codes from a string.
   if s.len == 0:
     return ""
   result = newStringOfCap(s.len)
@@ -18,7 +22,8 @@ func stripAnsi*(s: string): string =
       result.add(c)
       inc(i)
 
-func visibleWidth*(s: string): int =
+func visibleWidth*(s: string): int {.noSideEffect.} =
+  ## Calculates the visual width of a string (ignoring ANSI and counting Unicode runes).
   var isAscii = true
   for c in s:
     if ord(c) >= 128 or c == '\e':
@@ -49,10 +54,19 @@ func visibleWidth*(s: string): int =
       inc(n)
   return n
 
-func truncate*(s: string, w: int): string =
+func truncate*(s: string, w: int): string {.noSideEffect.} =
+  ## Truncates a string to a given visual width, respecting Unicode.
   if s.len <= w:
     return s
   let clean = stripAnsi(s)
   if clean.runeLen <= w:
     return clean
   return clean.runeSubStr(0, w)
+
+func arenaToString*(
+    arena: StringArena, handle: StringArenaHandle
+): string {.noSideEffect.} =
+  ## Converts an arena handle back to a Nim string (Allocates memory).
+  result = newStringOfCap(handle.length)
+  result.setLen(handle.length)
+  copyMem(addr result[0], unsafeAddr arena.buffer[handle.startOffset], handle.length)
