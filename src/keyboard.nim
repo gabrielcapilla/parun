@@ -1,13 +1,18 @@
+## Reads raw bytes from STDIN in non-blocking mode and parses ANSI escape
+## sequences (e.g., `\e[A` for arrow up).
+
 import std/[posix]
 import types
 
 func readByte(): int =
+  ## Reads a single byte from STDIN. Returns -1 if no data.
   var b: char
   if posix.read(STDIN_FILENO, addr b, 1) == 1:
     return ord(b)
   return -1
 
 func parseCsiSequence(): char =
+  ## Parses Control Sequence Introducer (CSI) `\e[...`
   let b3 = readByte()
   if b3 == -1:
     return KeyEsc
@@ -93,6 +98,7 @@ func parseCsiSequence(): char =
     return KeyNull
 
 func parseSs3Sequence(): char =
+  ## Parses Single Shift 3 (SS3) sequences `\eO...`
   let b3 = readByte()
   case b3
   of ord('P'):
@@ -111,6 +117,7 @@ func parseSs3Sequence(): char =
     return KeyNull
 
 func parseSpecialKeySequence(): char =
+  ## Dispatcher for escape sequences starting with `\e`.
   let b2 = readByte()
   if b2 == -1:
     return KeyEsc
@@ -127,6 +134,8 @@ func parseSpecialKeySequence(): char =
       return char(b2)
 
 proc getKeyAsync*(): char =
+  ## Attempts to read a full key in non-blocking mode.
+  ## Returns `KeyNull` if no input available.
   var flags = fcntl(STDIN_FILENO, F_GETFL, 0)
   let oldFlags = flags
   discard fcntl(STDIN_FILENO, F_SETFL, flags or O_NONBLOCK)
