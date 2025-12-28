@@ -1,6 +1,10 @@
+## Pure functions to parse `.nimble` files and repository URLs.
+
 import std/[strutils, tables]
 
-func getRawBaseUrl*(repoUrl: string): string =
+func getRawBaseUrl*(repoUrl: string): string {.noSideEffect.} =
+  ## Converts a repo URL (GitHub, GitLab, etc.) into its "raw" URL
+  ## for downloading individual files. (I tried!)
   var cleanUrl = repoUrl.strip()
 
   if cleanUrl.endsWith(" (git)"):
@@ -23,7 +27,11 @@ func getRawBaseUrl*(repoUrl: string): string =
     return cleanUrl & "/blob"
   return ""
 
-func parseNimbleInfo*(raw, name, url: string, tags: seq[string]): string =
+func parseNimbleInfo*(
+    raw, name, url: string, tags: seq[string]
+): string {.noSideEffect.} =
+  ## Parses `.nimble` file content and generates a formatted string
+  ## for the details panel.
   var info = initTable[string, string]()
   var requires: seq[string] = @[]
 
@@ -83,7 +91,9 @@ func parseNimbleInfo*(raw, name, url: string, tags: seq[string]): string =
     for r in requires:
       result.add("                 - " & r & "\n")
 
-func formatFallbackInfo*(raw: string): string =
+func formatFallbackInfo*(raw: string): string {.noSideEffect.} =
+  ## Formats `nimble search` output as fallback if `.nimble` file
+  ## cannot be downloaded.
   var info = initTable[string, string]()
   for line in raw.splitLines():
     if line.strip().len == 0:
