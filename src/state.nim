@@ -1,9 +1,15 @@
+## Contains pure logic to manipulate `AppState`.
+## Implements the "Arena" pattern to avoid memory allocations (GC)
+## during the main loop.
+
 import std/[strutils, tables, math, monotimes, bitops]
 import types, simd, pkgManager
 
 proc appendFromArena(
     state: AppState, offset, len: int, buffer: var string, maxLen: int = -1
 ) {.inline.} =
+  ## Copies bytes from the global arena to a destination string buffer.
+  ## Uses low-level `copyMem` for maximum speed.
   var copyLen = len
   if maxLen >= 0 and maxLen < len:
     copyLen = maxLen
@@ -16,17 +22,21 @@ proc appendFromArena(
     copyMem(addr buffer[currentLen], unsafeAddr state.textArena[offset], copyLen)
 
 proc appendName*(state: AppState, idx: int, buffer: var string, maxLen: int = -1) =
+  ## Retrieves the name of package `idx` and appends it to the buffer.
   let offset = int(state.soa.hot.locators[idx])
   let len = int(state.soa.hot.nameLens[idx])
   appendFromArena(state, offset, len, buffer, maxLen)
 
 proc appendVersion*(state: AppState, idx: int, buffer: var string, maxLen: int = -1) =
+  ## Retrieves the version of package `idx` and appends it to the buffer.
+  ## Calculates offset assuming version follows name in memory.
   let nameLen = int(state.soa.hot.nameLens[idx])
   let offset = int(state.soa.hot.locators[idx]) + nameLen
   let len = int(state.soa.cold.verLens[idx])
   appendFromArena(state, offset, len, buffer, maxLen)
 
 proc appendRepo*(state: AppState, idx: int, buffer: var string, maxLen: int = -1) =
+  ## Retrieves the repository name of package `idx`.
   let rIdx = state.soa.cold.repoIndices[idx]
   let rOffset = int(state.repoOffsets[idx])
   let rLen = int(state.repoLens[int(rIdx)])
@@ -39,24 +49,27 @@ proc appendRepo*(state: AppState, idx: int, buffer: var string, maxLen: int = -1
     buffer.setLen(currentLen + copyLen)
     copyMem(addr buffer[currentLen], unsafeAddr state.repoArena[rOffset], copyLen)
 
-func getNameLen*(state: AppState, idx: int): int {.inline.} =
+func getNameLen*(state: AppState, idx: int): int {.inline, noSideEffect.} =
   int(state.soa.hot.nameLens[idx])
 
-func getVersionLen*(state: AppState, idx: int): int {.inline.} =
+func getVersionLen*(state: AppState, idx: int): int {.inline, noSideEffect.} =
   int(state.soa.cold.verLens[idx])
 
-func getRepoLen*(state: AppState, idx: int): int {.inline.} =
+func getRepoLen*(state: AppState, idx: int): int {.inline, noSideEffect.} =
   int(state.repoLens[int(state.soa.cold.repoIndices[idx])])
 
 func getName*(state: AppState, idx: int): string =
+  ## Creates a new string with the name (Warning: Allocates GC memory).
   result = newStringOfCap(state.getNameLen(idx))
   state.appendName(idx, result)
 
 func getVersion*(state: AppState, idx: int): string =
+  ## Creates a new string with the version (Warning: Allocates GC memory).
   result = newStringOfCap(state.getVersionLen(idx))
   state.appendVersion(idx, result)
 
 func getRepo*(state: AppState, idx: int): string =
+  ## Creates a new string with the repository (Warning: Allocates GC memory).
   let repoOffset = int(state.repoOffsets[idx])
   let repoLen = int(state.repoLens[int(state.soa.cold.repoIndices[idx])])
   if repoOffset + repoLen <= state.repoArena.len:
@@ -66,10 +79,12 @@ func getRepo*(state: AppState, idx: int): string =
     return result
   return ""
 
-func getPkgId*(state: AppState, idx: int32): string =
+func getPkgId*(state: AppState, idx: int32): string {.noSideEffect.} =
+  ## Returns unique identifier "repo/name".
   state.getRepo(int(idx)) & "/" & state.getName(int(idx))
 
-func getEffectiveQuery*(buffer: string): string =
+func getEffectiveQuery*(buffer: string): string {.noSideEffect.} =
+  ## Extracts the real query by removing magic prefixes (aur/, nimble/).
   if buffer.startsWith("aur/"):
     return buffer[4 ..^ 1]
   if buffer.startsWith("nimble/"):
@@ -79,7 +94,17 @@ func getEffectiveQuery*(buffer: string): string =
   return buffer
 
 proc filterIndices*(state: AppState, query: string, results: var seq[int32]) =
+  ## Filtering System (Hot Path).
+  ##
+  ## Executes SIMD search over all packages.
+  ##
+  ## Optimizations:
+  ## 1. **Zero Allocations:** Reuses `results` buffer.
+  ## 2. **Linear Access:** Scans `textArena` sequentially.
+  ## 3. **SIMD:** Uses `scorePackageSimd`.
+  let count = results.len
   results.setLen(0)
+  results.setLen(count)
 
   let effective = getEffectiveQuery(query)
   let cleanQuery = effective.strip()
@@ -122,13 +147,15 @@ proc filterIndices*(state: AppState, query: string, results: var seq[int32]) =
   for i in 0 ..< buf.count:
     results[i] = buf.indices[i]
 
-proc isSelected*(state: AppState, idx: int): bool {.inline.} =
+func isSelected*(state: AppState, idx: int): bool {.inline, noSideEffect.} =
+  ## Checks if a package is selected using bitwise operations.
   let wordIdx = idx div 64
   if wordIdx >= state.selectionBits.len:
     return false
   testBit(state.selectionBits[wordIdx], idx mod 64)
 
 proc toggleSelection*(state: var AppState, idx: int) =
+  ## Toggles selection state of a package (Bitwise XOR).
   let wordIdx = idx div 64
   if wordIdx >= state.selectionBits.len:
     state.selectionBits.setLen(wordIdx + 1)
@@ -137,12 +164,14 @@ proc toggleSelection*(state: var AppState, idx: int) =
   word = word xor (1'u64 shl (idx mod 64))
   state.selectionBits[wordIdx] = word
 
-proc getSelectedCount*(state: AppState): int =
+func getSelectedCount*(state: AppState): int {.noSideEffect.} =
+  ## Counts total selected packages (Population Count).
   result = 0
   for word in state.selectionBits:
     result += countSetBits(word)
 
 proc filterBySelection*(state: AppState, results: var seq[int32]) =
+  ## Filters the visible list to show only selected items.
   results.setLen(0)
   let totalPkgs = state.soa.hot.locators.len
   for i, word in state.selectionBits:
@@ -155,6 +184,7 @@ proc filterBySelection*(state: AppState, results: var seq[int32]) =
           results.add(int32(realIdx))
 
 proc saveCurrentToDB*(state: var AppState) =
+  ## Persists current state (SoA + Arenas) to the corresponding DB.
   if state.dataSource == SourceSystem:
     if state.searchMode == ModeLocal:
       state.systemDB.soa = state.soa
@@ -178,10 +208,11 @@ proc saveCurrentToDB*(state: var AppState) =
     state.nimbleDB.repos = state.repos
     state.nimbleDB.repoArena = state.repoArena
     state.nimbleDB.repoLens = state.repoLens
-    state.nimbleDB.repoOffsets = state.repoOffsets
+    state.nimbleDB.repoOffsets = state.nimbleDB.repoOffsets
     state.nimbleDB.isLoaded = true
 
 proc loadFromDB*(state: var AppState, source: DataSource) =
+  ## Loads state from an in-memory DB, replacing current views.
   if source == SourceSystem:
     if state.searchMode == ModeLocal:
       state.soa = state.systemDB.soa
@@ -206,6 +237,7 @@ proc loadFromDB*(state: var AppState, source: DataSource) =
     state.repoOffsets = state.nimbleDB.repoOffsets
 
 proc switchToNimble*(state: var AppState) =
+  ## State transition to Nimble mode.
   if state.dataSource != SourceNimble:
     state.visibleIndices.setLen(0)
     saveCurrentToDB(state)
@@ -221,6 +253,7 @@ proc switchToNimble*(state: var AppState) =
       filterIndices(state, state.searchBuffer, state.visibleIndices)
 
 proc switchToSystem*(state: var AppState, mode: SearchMode) =
+  ## State transition to System mode (Local or AUR).
   if state.dataSource != SourceSystem or state.searchMode != mode:
     state.visibleIndices.setLen(0)
     saveCurrentToDB(state)
@@ -245,6 +278,7 @@ proc switchToSystem*(state: var AppState, mode: SearchMode) =
         filterIndices(state, state.searchBuffer, state.visibleIndices)
 
 proc restoreBaseState*(state: var AppState) =
+  ## Restores the initial application mode.
   if state.baseDataSource == SourceNimble:
     switchToNimble(state)
   else:
@@ -264,9 +298,40 @@ proc initPackageDB(): PackageDB =
     isLoaded: false,
   )
 
+proc initStringArena*(capacity: int): StringArena =
+  ## Initializes a string arena with pre-reserved capacity.
+  ## Avoids dynamic allocations during frame rendering.
+  var buffer = newSeqOfCap[char](capacity)
+  buffer.setLen(capacity)
+  StringArena(buffer: buffer, capacity: capacity, offset: 0)
+
+proc allocString*(arena: var StringArena, s: string): StringArenaHandle =
+  ## Allocates a string in the arena without triggering GC.
+  ## Returns a handle (offset+length) instead of a string.
+  ## If arena is full, it wraps around (circular buffer).
+  let requiredLen = s.len
+  let newOffset = arena.offset + requiredLen
+
+  if newOffset > arena.capacity:
+    arena.offset = 0
+    if requiredLen > arena.capacity:
+      raise newException(IndexDefect, "String too large for arena")
+
+  copyMem(addr arena.buffer[arena.offset], unsafeAddr s[0], requiredLen)
+
+  result = StringArenaHandle(startOffset: arena.offset, length: requiredLen)
+
+  arena.offset = newOffset
+
+proc resetArena*(arena: var StringArena) =
+  ## Resets the arena pointer to the beginning.
+  ## Does not free memory, just allows overwriting.
+  arena.offset = 0
+
 proc newState*(
     initialMode: SearchMode, initialShowDetails: bool, startNimble: bool
 ): AppState =
+  ## Constructor for the initial application state.
   let ds = if startNimble: SourceNimble else: SourceSystem
   AppState(
     soa: PackageSOA(
@@ -301,9 +366,15 @@ proc newState*(
     showDetails: initialShowDetails,
     needsRedraw: true,
     detailScroll: 0,
+    stringArena: initStringArena(64 * 1024),
   )
 
+func isInstalled*(state: AppState, idx: int): bool {.inline, noSideEffect.} =
+  ## Checks the installation flag (bit 0).
+  (state.soa.cold.flags[idx] and 1) != 0
+
 func toggleSelectionAtCursor*(state: var AppState) =
+  ## Helper to select the item under cursor and advance.
   if state.visibleIndices.len > 0:
     let realIdx = state.visibleIndices[state.cursor]
     state.toggleSelection(int(realIdx))
