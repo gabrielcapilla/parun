@@ -228,7 +228,7 @@ proc workerLoop(toolType: PkgManagerType) {.thread.} =
             installedSet.incl(parts[0])
 
         let nimbleSource = CachedJsonSource(
-          localFallbackPath: getHomeDir() / ".nimble/packages_official.json",
+          localFallbackPath: "",
           cachePath: "nimble-packages.json",
           url: NimbleMetaUrl,
           maxAgeHours: CacheMaxAgeHours,

@@ -247,10 +247,7 @@ proc switchToNimble*(state: var AppState) =
     state.scroll = 0
     state.selectionBits.setLen(0)
     loadFromDB(state, SourceNimble)
-    if not state.nimbleDB.isLoaded:
-      requestLoadNimble(state.searchId)
-    else:
-      filterIndices(state, state.searchBuffer, state.visibleIndices)
+    requestLoadNimble(state.searchId)
 
 proc switchToSystem*(state: var AppState, mode: SearchMode) =
   ## State transition to System mode (Local or AUR).
@@ -267,15 +264,9 @@ proc switchToSystem*(state: var AppState, mode: SearchMode) =
     loadFromDB(state, SourceSystem)
 
     if mode == ModeLocal:
-      if not state.systemDB.isLoaded:
-        requestLoadAll(state.searchId)
-      else:
-        filterIndices(state, state.searchBuffer, state.visibleIndices)
+      requestLoadAll(state.searchId)
     else:
-      if not state.aurDB.isLoaded:
-        requestLoadAur(state.searchId)
-      else:
-        filterIndices(state, state.searchBuffer, state.visibleIndices)
+      requestLoadAur(state.searchId)
 
 proc restoreBaseState*(state: var AppState) =
   ## Restores the initial application mode.
