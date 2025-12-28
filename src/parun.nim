@@ -1,4 +1,6 @@
-import std/[terminal, os, selectors, posix, strutils, parseopt, tables, bitops]
+## Initializes the terminal, package manager, and main event loop.
+
+import std/[os, posix, tables, terminal, selectors, strutils, parseopt, bitops]
 import terminal as term, state, keyboard
 import types, core, tui, pkgManager
 
@@ -8,6 +10,8 @@ proc main() =
     startShowDetails = true
     startNimble = false
 
+  # CLI Argument Parsing
+  # Maybe next time I use my own library `flags`
   var p = initOptParser()
   for kind, key, val in p.getopt():
     case kind
@@ -29,6 +33,7 @@ proc main() =
 
   var appState = newState(startMode, startShowDetails, startNimble)
 
+  # Initial data load
   if startNimble:
     requestLoadNimble(appState.searchId)
   else:
@@ -36,6 +41,7 @@ proc main() =
     if startMode == ModeAUR:
       requestLoadAur(appState.searchId)
 
+  # Async I/O Setup
   let selector = newSelector[int]()
   selector.registerHandle(STDIN_FILENO, {Event.Read}, 0)
   selector.registerHandle(resizePipe[0], {Event.Read}, 1)
@@ -47,7 +53,9 @@ proc main() =
 
   var renderBuffer = newStringOfCap(64 * 1024)
 
+  # Main Loop
   while not appState.shouldQuit:
+    # Install/Uninstall Management
     if appState.shouldInstall or appState.shouldUninstall:
       var targets: seq[string] = @[]
       let selCount = appState.getSelectedCount()
@@ -102,6 +110,7 @@ proc main() =
         appState.shouldInstall = false
         appState.shouldUninstall = false
 
+    # Rendering
     if appState.needsRedraw:
       let res = renderUi(appState, renderBuffer, terminalHeight(), terminalWidth())
       stdout.write("\e[?25l")
@@ -114,6 +123,7 @@ proc main() =
       stdout.flushFile()
       appState.needsRedraw = false
 
+      # Lazy details loading
       if appState.showDetails and appState.visibleIndices.len > 0:
         let idx = appState.visibleIndices[appState.cursor]
         if not appState.detailsCache.hasKey(idx):
@@ -122,6 +132,7 @@ proc main() =
             idx, appState.getName(i), appState.getRepo(i), appState.dataSource
           )
 
+    # Event Waiting (Input or Resize)
     let ready = selector.select(20)
     for key in ready:
       if key.fd == resizePipe[0]:
@@ -137,6 +148,7 @@ proc main() =
           if appState.shouldQuit:
             break
 
+    # Worker message processing
     for msg in pollWorkerMessages():
       let listH = max(1, terminalHeight() - 2)
       appState = update(appState, msg, listH)
