@@ -22,17 +22,17 @@ Written in [Nim](https://github.com/nim-lang/Nim) and optimized with SIMD instru
 - **OS**: Arch Linux or Arch Linux based distro
 - **Nim**: [Install Nim](https://nim-lang.org/)
 
-## Installation
+<!--## Installation-->
 
-The easiest way to install Parun is using `nimble`:
+<!--The easiest way to install Parun is using `nimble`:
 
 ```bash
 nimble install https://github.com/gabrielcapilla/parun.git
-```
+```-->
 
 ## Build
 
-If you wish to manually compile the project from source or generate an optimized release version:
+Compile the project from source and generate an optimized release version:
 
 1.  Clone the repository:
 
