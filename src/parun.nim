@@ -1,8 +1,11 @@
 ## Initializes the terminal, package manager, and main event loop.
 
-import std/[os, posix, tables, terminal, selectors, strutils, parseopt, bitops]
-import terminal as term, state, keyboard
-import types, core, tui, pkgManager
+import std/[posix, tables, terminal, selectors, strutils, parseopt, bitops]
+import ui/[tui, keyboard, terminal as term]
+import core/[types, state, engine]
+import pkgs/manager
+
+const ParunVersion* = "0.4.0"
 
 proc main() =
   var
@@ -11,12 +14,14 @@ proc main() =
     startNimble = false
 
   # CLI Argument Parsing
-  # Maybe next time I use my own library `flags`
   var p = initOptParser()
   for kind, key, val in p.getopt():
     case kind
     of cmdLongOption, cmdShortOption:
       case key
+      of "version", "v":
+        echo "parun version: ", ParunVersion
+        quit(0)
       of "noinfo", "n":
         startShowDetails = false
       of "nimble", "nim":

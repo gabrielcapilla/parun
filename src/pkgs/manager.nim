@@ -1,15 +1,14 @@
 ## Thread dedicated to blocking operations (I/O, Network, Subprocess execution).
 ## Abstracts differences between Pacman, Paru, Yay and Nimble.
 
-# This module is very extensive and has a lot of features.
-# I should make an effort to divide the code and even create new modules.
-
 import
   std/[
     os, osproc, strutils, strformat, tables, streams, sets, parsejson, monotimes,
     httpclient, net, parseutils, times,
   ]
-import types, batcher, nUtils, pUtils
+import ../utils/[nimble, pacman]
+import ../core/types
+import batcher
 
 type
   WorkerReqKind = enum
@@ -137,7 +136,7 @@ proc getFreshJsonPath*(
 
   return (bestPath, wasDownloaded)
 
-proc skipJsonBlock(p: var JsonParser) =
+proc skipJsonBlock*(p: var JsonParser) =
   ## Skips a full JSON block (object or array) efficiently.
   var depth = 1
   while depth > 0:
@@ -188,19 +187,45 @@ proc workerLoop(toolType: PkgManagerType) {.thread.} =
         var bb = initBatchBuilder()
         var counter = 0
         var interrupted = false
+        var lastRepo = ""
 
         while outp.readLine(line):
           if line.len == 0:
             continue
           var i = 0
-          var repo, name, ver: string
-          i += line.parseUntil(repo, ' ', i)
-          i += line.skipWhitespace(i)
-          i += line.parseUntil(name, ' ', i)
-          i += line.skipWhitespace(i)
-          i += line.parseUntil(ver, ' ', i)
 
-          if bb.textChunk.len + name.len + ver.len > BatchSize or counter >= 1000:
+          # Parse Repo (optimized)
+          let repoLen = line.skipUntil(' ', i)
+          let repoStart = i
+          i += repoLen
+          i += line.skipWhitespace(i)
+
+          # Check if repo changed to reuse string
+          var repoStr = lastRepo
+          var match = true
+          if repoLen != lastRepo.len:
+            match = false
+          else:
+            for k in 0 ..< repoLen:
+              if line[repoStart + k] != lastRepo[k]:
+                match = false
+                break
+
+          if not match:
+            repoStr = line[repoStart ..< repoStart + repoLen]
+            lastRepo = repoStr
+
+          # Parse Name
+          let nameLen = line.skipUntil(' ', i)
+          let nameStart = i
+          i += nameLen
+          i += line.skipWhitespace(i)
+
+          # Parse Ver
+          let verLen = line.skipUntil(' ', i)
+          let verStart = i
+
+          if bb.textChunk.len + nameLen + verLen > BatchSize or counter >= 1000:
             flushBatch(bb, resChan, req.searchId, tStart)
             counter = 0
             let (hasNew, newReq) = reqChan.tryRecv()
@@ -210,8 +235,20 @@ proc workerLoop(toolType: PkgManagerType) {.thread.} =
               interrupted = true
               break
 
+          # Check installed (lazy string alloc)
+          var installed = isPackageInstalled(line)
+          if not installed:
+            # Only alloc name string if strict check against pacman -Q is needed
+            # (and if not found by [installed] tag)
+            let nameStr = line[nameStart ..< nameStart + nameLen]
+            if instMap.hasKey(nameStr):
+              installed = true
+
           bb.addPackage(
-            name, ver, repo, instMap.hasKey(name) or isPackageInstalled(line)
+            line.toOpenArray(nameStart, nameStart + nameLen - 1),
+            line.toOpenArray(verStart, verStart + verLen - 1),
+            repoStr,
+            installed,
           )
           counter.inc()
         p.close()
@@ -524,12 +561,12 @@ proc pollWorkerMessages*(): seq[Msg] =
   while true:
     (let (ok, msg) = resChan.tryRecv(); if not ok: break ; result.add(msg))
 
-func buildCmd(tool: PkgManagerType, op: string, targets: seq[string]): string =
+func buildCmd*(tool: PkgManagerType, op: string, targets: seq[string]): string =
   let def = Tools[tool]
   let prefix = if def.sudo and tool != ManNimble: "sudo " else: ""
   result = prefix & def.bin & op & targets.join(" ")
 
-proc runTransaction(tool: PkgManagerType, targets: seq[string], install: bool): int =
+proc runTransaction*(tool: PkgManagerType, targets: seq[string], install: bool): int =
   if targets.len == 0:
     return 0
   let def = Tools[tool]
