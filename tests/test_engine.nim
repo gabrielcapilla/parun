@@ -12,15 +12,15 @@ import ../src/core/types
 import ../src/core/input_handler
 
 suite "Engine - Function Signatures":
-  test "processInput - existe":
-    # Verificar que la función existe
+  test "processInput - exists":
+    # Verify the function exists
     when declared(processInput):
       check true
     else:
       check false
 
-  test "update - existe":
-    # Verificar que la función existe
+  test "update - exists":
+    # Verify the function exists
     when declared(update):
       check true
     else:
@@ -39,7 +39,7 @@ suite "Engine - processInput - Toggle Selection":
     check state.cursor == 0
     check state.scroll == 0
 
-  test "processInput - Ctrl+S toggle de nuevo":
+  test "processInput - Ctrl+S toggle again":
     var state = newState(ModeLocal, false, false)
     state.viewingSelection = true
     state.cursor = 5
@@ -77,11 +77,11 @@ suite "Engine - processInput - Delegates to handleInput":
 
     processInput(state, 'a', 10)
 
-    # handleInput debería insertar 'a'
+    # handleInput should insert 'a'
     check state.searchBuffer.len == 5
 
 suite "Engine - processInput - Last Input Time":
-  test "processInput - actualiza lastInputTime":
+  test "processInput - updates lastInputTime":
     var state = newState(ModeLocal, false, false)
     let before = state.lastInputTime
 
@@ -98,8 +98,8 @@ suite "Engine - Query Detection":
 
     processInput(state, ' ', 10)
 
-    # Después de procesar input con "nimble/", debería cambiar a Nimble
-    # No podemos verificar directamente sin mocks de manager
+    # After processing input with "nimble/", should switch to Nimble
+    # We can't verify directly without manager mocks
 
   test "searchBuffer starts with aur/":
     var state = newState(ModeLocal, false, false)
@@ -109,16 +109,16 @@ suite "Engine - Query Detection":
 
     processInput(state, ' ', 10)
 
-    # Similar a nimble, debería cambiar a AUR
+    # Similar to nimble, should switch to AUR
 
 suite "Engine - State Update Return Value":
-  test "update - retorna AppState":
+  test "update - returns AppState":
     var state = newState(ModeLocal, false, false)
     let msg = Msg(kind: MsgInput, key: 'a')
 
     let result = update(state, msg, 10)
 
-    # update retorna una copia de state (AppState es un object, no un puntero)
+    # update returns a copy of state (AppState is an object, not a pointer)
     check result.searchBuffer == "a"
     check result.needsRedraw == true
 
@@ -149,22 +149,22 @@ suite "Engine - Debounce Pending":
     check state.debouncePending == false
 
 suite "Engine - Status Message":
-  test "processInput - limpia statusMessage":
+  test "processInput - clears statusMessage":
     var state = newState(ModeLocal, false, false)
     state.statusMessage = "Previous message"
 
     processInput(state, 'a', 10)
 
-    # statusMessage se limpia durante processInput
+    # statusMessage is cleared during processInput
     check state.statusMessage.len == 0 or state.statusMessage == "Searching..." or
       state.statusMessage == "No results in Nimble" or
       state.statusMessage == "Type to search AUR..." or
       state.statusMessage == "No results in Nimble" or state.statusMessage == "Error"
 
 suite "Engine - Filtering on Input":
-  test "processInput - llama a filterIndices":
+  test "processInput - calls filterIndices":
     var state = newState(ModeLocal, false, false)
-    # Inicializar con datos mínimos
+    # Initialize with minimal data
     state.soa.hot.locators = @[uint32(0), uint32(1), uint32(2)]
     state.soa.hot.nameLens = @[uint8(4), uint8(4), uint8(4)]
     state.soa.cold.verLens = @[uint8(5), uint8(5), uint8(5)]
@@ -184,14 +184,14 @@ suite "Engine - Filtering on Input":
 
     processInput(state, ' ', 10)
 
-    # filterIndices debería haberse llamado
-    # No podemos verificar el resultado directo sin acceder a internals
+    # filterIndices should have been called
+    # We can't verify the direct result without accessing internals
 
 suite "Engine - Mode Switching":
-  test "processInput - en modo viewingSelection llama a filterBySelection":
+  test "processInput - in viewingSelection mode calls filterBySelection":
     var state = newState(ModeLocal, false, false)
     state.viewingSelection = true
-    # Inicializar con datos mínimos
+    # Initialize with minimal data
     state.soa.hot.locators = @[uint32(0), uint32(1), uint32(2)]
     state.soa.hot.nameLens = @[uint8(4), uint8(4), uint8(4)]
     state.soa.cold.verLens = @[uint8(5), uint8(5), uint8(5)]
@@ -209,7 +209,7 @@ suite "Engine - Mode Switching":
 
     processInput(state, KeyCtrlS, 10)
 
-    # Debería llamar a filterBySelection en modo viewingSelection
+    # Should call filterBySelection in viewingSelection mode
     check state.viewingSelection == false
 
 suite "Engine - Constants":
@@ -229,7 +229,7 @@ suite "Engine - Constants":
     check int(MsgError) == 4
 
 suite "Engine - Performance":
-  test "Benchmark processInput 1K llamadas":
+  test "Benchmark processInput 1K calls":
     var state = newState(ModeLocal, false, false)
     let start = getMonoTime()
 
@@ -239,7 +239,7 @@ suite "Engine - Performance":
     let elapsed = getMonoTime() - start
     check elapsed.inMilliseconds < 5000 # < 5s (includes filtering)
 
-  test "Benchmark toggle viewingSelection 10K operaciones":
+  test "Benchmark toggle viewingSelection 10K ops":
     var state = newState(ModeLocal, false, false)
     let start = getMonoTime()
 

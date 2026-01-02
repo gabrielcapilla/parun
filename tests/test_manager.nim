@@ -9,10 +9,10 @@ import std/[monotimes, times, strutils, os, streams, parsejson]
 import ../src/pkgs/manager
 
 suite "PKGS - Tool Configuration":
-  test "Tools array - tiene 4 herramientas":
+  test "Tools array - has 4 tools":
     check Tools.len == 4
 
-  test "Tools[ManPacman] - configuracion correcta":
+  test "Tools[ManPacman] - correct configuration":
     let pacman = Tools[ManPacman]
     check pacman.bin == "pacman"
     check pacman.installCmd == " -S "
@@ -21,7 +21,7 @@ suite "PKGS - Tool Configuration":
     check pacman.sudo == true
     check pacman.supportsAur == false
 
-  test "Tools[ManParu] - configuracion correcta":
+  test "Tools[ManParu] - correct configuration":
     let paru = Tools[ManParu]
     check paru.bin == "paru"
     check paru.installCmd == " -S "
@@ -30,7 +30,7 @@ suite "PKGS - Tool Configuration":
     check paru.sudo == false
     check paru.supportsAur == false
 
-  test "Tools[ManYay] - configuracion correcta":
+  test "Tools[ManYay] - correct configuration":
     let yay = Tools[ManYay]
     check yay.bin == "yay"
     check yay.installCmd == " -S "
@@ -39,7 +39,7 @@ suite "PKGS - Tool Configuration":
     check yay.sudo == false
     check yay.supportsAur == false
 
-  test "Tools[ManNimble] - configuracion correcta":
+  test "Tools[ManNimble] - correct configuration":
     let nimble = Tools[ManNimble]
     check nimble.bin == "nimble"
     check nimble.installCmd == " install "
@@ -48,25 +48,25 @@ suite "PKGS - Tool Configuration":
     check nimble.sudo == false
     check nimble.supportsAur == false
 
-  test "ToolDef enum - valores correctos":
+  test "ToolDef enum - correct values":
     check ManPacman.ord == 0
     check ManParu.ord == 1
     check ManYay.ord == 2
     check ManNimble.ord == 3
 
 suite "PKGS - Constants":
-  test "AurMetaUrl - URL correcta":
+  test "AurMetaUrl - correct URL":
     check AurMetaUrl == "https://aur.archlinux.org/packages-meta-v1.json.gz"
 
-  test "NimbleMetaUrl - URL correcta":
+  test "NimbleMetaUrl - correct URL":
     check NimbleMetaUrl ==
       "https://raw.githubusercontent.com/nim-lang/packages/refs/heads/master/packages.json"
 
-  test "CacheMaxAgeHours - valor correcto":
+  test "CacheMaxAgeHours - correct value":
     check CacheMaxAgeHours == 24
 
 suite "PKGS - CachedJsonSource":
-  test "CachedJsonSource - estructura completa":
+  test "CachedJsonSource - complete structure":
     let source = CachedJsonSource(
       localFallbackPath: "/tmp/test.json",
       cachePath: "test.json",
@@ -80,7 +80,7 @@ suite "PKGS - CachedJsonSource":
     check source.maxAgeHours == 24
     check source.isCompressed == false
 
-  test "CachedJsonSource - con valores por defecto":
+  test "CachedJsonSource - with default values":
     let source = CachedJsonSource(
       localFallbackPath: "",
       cachePath: "cache.json",
@@ -171,68 +171,68 @@ suite "PKGS - JSON Parser":
     close(p)
 
 suite "PKGS - Command Building":
-  test "buildCmd - pacman install con sudo":
+  test "buildCmd - pacman install with sudo":
     let cmd = buildCmd(ManPacman, " -S ", @["vim", "emacs"])
     check cmd.startsWith("sudo pacman -S ")
     check "vim" in cmd
     check "emacs" in cmd
 
-  test "buildCmd - paru install sin sudo":
+  test "buildCmd - paru install without sudo":
     let cmd = buildCmd(ManParu, " -S ", @["vim", "emacs"])
     check cmd.startsWith("paru -S ")
     check not cmd.startsWith("sudo ")
     check "vim" in cmd
     check "emacs" in cmd
 
-  test "buildCmd - yay install sin sudo":
+  test "buildCmd - yay install without sudo":
     let cmd = buildCmd(ManYay, " -S ", @["vim", "emacs"])
     check cmd.startsWith("yay -S ")
     check not cmd.startsWith("sudo ")
     check "vim" in cmd
     check "emacs" in cmd
 
-  test "buildCmd - nimble install sin sudo":
+  test "buildCmd - nimble install without sudo":
     let cmd = buildCmd(ManNimble, " install ", @["cligen"])
     check cmd.startsWith("nimble install ")
     check not cmd.startsWith("sudo ")
     check "cligen" in cmd
 
-  test "buildCmd - pacman remove con sudo":
+  test "buildCmd - pacman remove with sudo":
     let cmd = buildCmd(ManPacman, " -R ", @["vim"])
     check cmd.startsWith("sudo pacman -R ")
     check "vim" in cmd
 
-  test "buildCmd - targets vacios":
+  test "buildCmd - empty targets":
     let cmd = buildCmd(ManPacman, " -S ", @[])
     check cmd == "sudo pacman -S "
 
-  test "buildCmd - solo un target":
+  test "buildCmd - single target":
     let cmd = buildCmd(ManNimble, " install ", @["testpkg"])
     check cmd == "nimble install testpkg"
 
 suite "PKGS - Transaction Operations":
-  test "runTransaction - targets vacios retorna 0":
+  test "runTransaction - empty targets returns 0":
     let result = runTransaction(ManPacman, @[], true)
     check result == 0
 
-  test "installPackages - usa nimble para SourceNimble":
+  test "installPackages - uses nimble for SourceNimble":
     let cmd = buildCmd(ManNimble, " install ", @["testpkg"])
     check cmd.startsWith("nimble install ")
 
-  test "installPackages - usa pacman para SourceLocal":
+  test "installPackages - uses pacman for SourceLocal":
     let cmd = buildCmd(ManPacman, " -S ", @["testpkg"])
     check cmd.startsWith("sudo pacman -S ")
 
-  test "uninstallPackages - usa nimble para SourceNimble":
+  test "uninstallPackages - uses nimble for SourceNimble":
     let cmd = buildCmd(ManNimble, " uninstall ", @["testpkg"])
     check cmd.startsWith("nimble uninstall ")
 
-  test "uninstallPackages - usa pacman para SourceLocal":
+  test "uninstallPackages - uses pacman for SourceLocal":
     let cmd = buildCmd(ManPacman, " -R ", @["testpkg"])
     check cmd.startsWith("sudo pacman -R ")
 
 suite "PKGS - Cache Path Handling":
-  test "CachedJsonSource - path absoluto y relativo":
+  test "CachedJsonSource - absolute and relative paths":
     let absPath = "/tmp/test.json"
     let relPath = "test.json"
 
@@ -247,7 +247,7 @@ suite "PKGS - Cache Path Handling":
     check source1.localFallbackPath == absPath
     check source1.cachePath == relPath
 
-  test "CachedJsonSource - URLs de cache para AUR y Nimble":
+  test "CachedJsonSource - cache URLs for AUR and Nimble":
     let aurSource = CachedJsonSource(
       localFallbackPath: "",
       cachePath: "aur-packages-meta-v1.json.gz",
@@ -270,24 +270,24 @@ suite "PKGS - Cache Path Handling":
     check nimbleSource.isCompressed == false
 
 suite "PKGS - Edge Cases":
-  test "ToolDef - todos los comandos tienen espacios":
+  test "ToolDef - all commands have spaces":
     for tool in [ManPacman, ManParu, ManYay, ManNimble]:
       let def = Tools[tool]
       check def.installCmd.len > 0
       check def.uninstallCmd.len > 0
       check def.searchCmd.len > 0
-      # Verificar que tienen espacio al inicio
+      # Verify they have space at start
       check def.installCmd[0] == ' '
       check def.uninstallCmd[0] == ' '
       check def.searchCmd[0] == ' '
 
-  test "buildCmd - maneja targets con espacios":
+  test "buildCmd - handles targets with spaces":
     let cmd = buildCmd(ManPacman, " -S ", @["vim", "emacs", "nano"])
     check "vim" in cmd
     check "emacs" in cmd
     check "nano" in cmd
 
-  test "CachedJsonSource - maxAgeHours puede ser 0":
+  test "CachedJsonSource - maxAgeHours can be 0":
     let source = CachedJsonSource(
       localFallbackPath: "",
       cachePath: "test.json",
@@ -297,7 +297,7 @@ suite "PKGS - Edge Cases":
     )
     check source.maxAgeHours == 0
 
-  test "CachedJsonSource - URL puede ser HTTPS o HTTP":
+  test "CachedJsonSource - URL can be HTTPS or HTTP":
     let source1 = CachedJsonSource(
       localFallbackPath: "",
       cachePath: "test.json",

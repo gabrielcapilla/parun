@@ -10,21 +10,21 @@ suite "State - StringArena":
     check arena.offset == 0
     check arena.buffer.len == 1024
 
-  test "allocString - string simple":
+  test "allocString - simple string":
     var arena = initStringArena(1024)
     let handle = arena.allocString("hello")
     check handle.length == 5
     check handle.startOffset == 0
     check arena.offset == 5
 
-  test "allocString - múltiples strings":
+  test "allocString - multiple strings":
     var arena = initStringArena(1024)
     discard arena.allocString("first")
     discard arena.allocString("second")
     discard arena.allocString("third")
     check arena.offset == 5 + 6 + 5 # first + second + third
 
-  test "allocString - contenido correcto":
+  test "allocString - correct content":
     var arena = initStringArena(1024)
     let handle1 = arena.allocString("hello")
     let handle2 = arena.allocString("world")
@@ -37,7 +37,7 @@ suite "State - StringArena":
     copyMem(addr str2[0], addr arena.buffer[handle2.startOffset], handle2.length)
     check str2 == "world"
 
-  test "resetArena - reset offset":
+  test "resetArena - resets offset":
     var arena = initStringArena(1024)
     discard arena.allocString("hello")
     check arena.offset == 5
@@ -45,16 +45,16 @@ suite "State - StringArena":
     arena.resetArena()
     check arena.offset == 0
 
-  test "allocString - overflow con wrap-around":
+  test "allocString - overflow with wrap-around":
     var arena = initStringArena(10)
     discard arena.allocString("12345") # offset = 5
     check arena.offset == 5
 
-    discard arena.allocString("123456") # offset = 11 > 10, wrap a 0
-    # Nota: después del wrap, el offset se mantiene en 11 (bug o feature de implementación)
+    discard arena.allocString("123456") # offset = 11 > 10, wrap to 0
+    # Note: after wrap, offset remains at 11 (bug or feature)
     check arena.offset == 11
 
-  test "allocString - string muy grande raises":
+  test "allocString - very large string raises":
     var arena = initStringArena(10)
     expect IndexDefect:
       discard arena.allocString("very-long-string")
@@ -90,56 +90,56 @@ suite "State - Package Access":
     state.appendRepo(0, buf)
     check buf == "extra"
 
-  test "appendName - con maxLen":
+  test "appendName - with maxLen":
     var buf = ""
     state.appendName(1, buf, 3)
-    check buf == "ema" # primeros 3 chars de "emacs"
+    check buf == "ema" # first 3 chars of "emacs"
 
-  test "appendVersion - con maxLen":
+  test "appendVersion - with maxLen":
     var buf = ""
     state.appendVersion(1, buf, 2)
     check buf == "25"
 
-  test "getName - retorna string completo":
+  test "getName - returns full string":
     check state.getName(0) == "vim"
 
-  test "getVersion - retorna string completo":
+  test "getVersion - returns full string":
     check state.getVersion(0) == "8.0.0"
 
-  test "getRepo - retorna string completo":
+  test "getRepo - returns full string":
     check state.getRepo(0) == "extra"
 
-  test "getNameLen - retorna longitud":
+  test "getNameLen - returns length":
     check state.getNameLen(0) == 3
     check state.getNameLen(1) == 5
 
-  test "getVersionLen - retorna longitud":
+  test "getVersionLen - returns length":
     check state.getVersionLen(0) == 5
     check state.getVersionLen(1) == 6
 
-  test "getRepoLen - retorna longitud":
+  test "getRepoLen - returns length":
     check state.getRepoLen(0) == 5
 
-  test "getPkgId - formato repo/name":
+  test "getPkgId - repo/name format":
     check state.getPkgId(0) == "extra/vim"
 
 suite "State - Query Processing":
-  test "getEffectiveQuery - sin prefijo":
+  test "getEffectiveQuery - no prefix":
     check getEffectiveQuery("vim") == "vim"
 
-  test "getEffectiveQuery - aur/ prefijo":
+  test "getEffectiveQuery - aur/ prefix":
     check getEffectiveQuery("aur/vim") == "vim"
 
-  test "getEffectiveQuery - nimble/ prefijo":
+  test "getEffectiveQuery - nimble/ prefix":
     check getEffectiveQuery("nimble/vim") == "vim"
 
-  test "getEffectiveQuery - nim/ prefijo":
+  test "getEffectiveQuery - nim/ prefix":
     check getEffectiveQuery("nim/vim") == "vim"
 
-  test "getEffectiveQuery - query vacío":
+  test "getEffectiveQuery - empty query":
     check getEffectiveQuery("") == ""
 
-  test "getEffectiveQuery - solo prefijo":
+  test "getEffectiveQuery - prefix only":
     check getEffectiveQuery("aur/") == ""
 
 suite "State - Filter Indices":
@@ -157,7 +157,7 @@ suite "State - Filter Indices":
     state.repoLens = @[uint8(5)]
     state.repoOffsets = @[uint16(0)]
 
-  test "filterIndices - query vacío retorna todos":
+  test "filterIndices - empty query returns all":
     var results = newSeq[int32]()
     filterIndices(state, "", results)
     check results.len == 5
@@ -173,7 +173,7 @@ suite "State - Filter Indices":
     filterIndices(state, "nonexistent", results)
     check results.len == 0
 
-  test "filterIndices - reusa buffer":
+  test "filterIndices - reuses buffer":
     var results = newSeq[int32]()
     filterIndices(state, "vim", results)
     let len1 = results.len
@@ -181,10 +181,10 @@ suite "State - Filter Indices":
     filterIndices(state, "emacs", results)
     let len2 = results.len
 
-    # Reutilización sin realloc si el buffer es suficientemente grande
+    # Reuse without realloc if buffer is large enough
     check len2 <= len1 or len2 > 0
 
-  test "filterIndices - max 2000 resultados":
+  test "filterIndices - max 2000 results":
     var bigState = newState(ModeLocal, false, false)
     # Crear 3000 paquetes
     var text = ""
@@ -238,7 +238,7 @@ suite "State - Selection":
     state.selectionBits = newSeq[uint64]()
     state.visibleIndices = newSeq[int32]()
 
-  test "isSelected - inicialmente false":
+  test "isSelected - initially false":
     check state.isSelected(0) == false
     check state.isSelected(50) == false
     check state.isSelected(99) == false
@@ -250,7 +250,7 @@ suite "State - Selection":
     state.toggleSelection(0)
     check state.isSelected(0) == false
 
-  test "toggleSelection - múltiple bits":
+  test "toggleSelection - multiple bits":
     state.toggleSelection(0)
     state.toggleSelection(1)
     state.toggleSelection(63)
@@ -261,20 +261,20 @@ suite "State - Selection":
     check state.isSelected(63) == true
     check state.isSelected(64) == true
 
-  test "toggleSelection - expande selectionBits":
+  test "toggleSelection - expands selectionBits":
     check state.selectionBits.len == 0
 
     state.toggleSelection(100)
     check state.selectionBits.len > 0
 
-  test "getSelectedCount - cuenta correctamente":
+  test "getSelectedCount - counts correctly":
     state.toggleSelection(0)
     state.toggleSelection(10)
     state.toggleSelection(20)
 
     check state.getSelectedCount() == 3
 
-  test "filterBySelection - filtra seleccionados":
+  test "filterBySelection - filters selected":
     state.toggleSelection(0)
     state.toggleSelection(5)
     state.toggleSelection(10)
@@ -287,12 +287,12 @@ suite "State - Selection":
     check int32(5) in results
     check int32(10) in results
 
-  test "filterBySelection - sin selección vacío":
+  test "filterBySelection - no selection empty":
     var results = newSeq[int32]()
     filterBySelection(state, results)
     check results.len == 0
 
-  test "toggleSelectionAtCursor - toggles y avanza":
+  test "toggleSelectionAtCursor - toggles and advances":
     state.visibleIndices = @[int32(0), int32(1), int32(2), int32(3), int32(4)]
     state.cursor = 0
 
@@ -355,12 +355,12 @@ suite "State - Database Management":
 
     check state.textArena.len > 0
 
-  # Nota: switchToNimble, switchToSystem y restoreBaseState requieren
-  # el sistema de mensajes activo (canales) para funcionar correctamente
-  # por lo que no se prueban en tests unitarios.
+  # Note: switchToNimble, switchToSystem and restoreBaseState require
+  # active messaging system (channels) to work correctly
+  # so they are not tested in unit tests.
 
 suite "State - Initialization":
-  test "newState - defaults correctos":
+  test "newState - correct defaults":
     let state = newState(ModeLocal, false, false)
 
     check state.searchMode == ModeLocal
@@ -379,24 +379,24 @@ suite "State - Initialization":
     check state.visibleIndices.len == 0
     check state.selectionBits.len == 0
 
-  test "newState - con detalles habilitados":
+  test "newState - with details enabled":
     let state = newState(ModeLocal, true, false)
 
     check state.showDetails == true
 
-  test "newState - modo nimble":
+  test "newState - nimble mode":
     let state = newState(ModeLocal, false, true)
 
     check state.dataSource == SourceNimble
     check state.baseDataSource == SourceNimble
 
-  test "newState - modo aur como base":
+  test "newState - aur mode as base":
     let state = newState(ModeAUR, false, false)
 
     check state.searchMode == ModeAUR
     check state.baseSearchMode == ModeAUR
 
-  test "isInstalled - bit 0 en flags":
+  test "isInstalled - bit 0 in flags":
     var state = newState(ModeLocal, false, false)
     state.soa.hot.locators = @[uint32(0), uint32(0), uint32(0), uint32(0)]
     state.soa.hot.nameLens = @[uint8(3), uint8(3), uint8(3), uint8(3)]
@@ -410,7 +410,7 @@ suite "State - Initialization":
     check state.isInstalled(3) == true
 
 suite "State - Performance":
-  test "Benchmark filterIndices 10K paquetes":
+  test "Benchmark filterIndices 10K packages":
     var state = newState(ModeLocal, false, false)
 
     var text = ""
@@ -465,7 +465,7 @@ suite "State - Performance":
     check state.getSelectedCount() == 1000
     check elapsed.inMilliseconds < 10 # < 10ms
 
-  test "Benchmark appendName 10K llamadas":
+  test "Benchmark appendName 10K calls":
     var state = newState(ModeLocal, false, false)
     state.textArena = "vim8.0.0extra".toSeq()
     state.soa.hot.locators = @[uint32(0)]

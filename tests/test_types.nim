@@ -2,7 +2,7 @@ import unittest
 import ../src/core/types
 
 suite "Types - Constants":
-  test "Constantes de teclas - valores ASCII":
+  test "Key constants - ASCII values":
     check KeyNull.ord == 0
     check KeyBackspace.ord == 8
     check KeyTab.ord == 9
@@ -11,7 +11,7 @@ suite "Types - Constants":
     check KeySpace.ord == 32
     check KeyBack.ord == 127
 
-  test "Constantes de teclas extendidas":
+  test "Extended key constants":
     check KeyUp.ord == 200
     check KeyDown.ord == 201
     check KeyLeft.ord == 202
@@ -22,7 +22,7 @@ suite "Types - Constants":
     check KeyEnd.ord == 207
     check KeyF1.ord == 210
 
-  test "Constantes de control":
+  test "Control key constants":
     check KeyCtrlA.ord == 1
     check KeyCtrlD.ord == 4
     check KeyCtrlE.ord == 5
@@ -32,7 +32,7 @@ suite "Types - Constants":
     check KeyCtrlU.ord == 21
     check KeyCtrlY.ord == 25
 
-  test "Constantes de color ANSI":
+  test "ANSI color constants":
     check AnsiReset == "\e[0m"
     check AnsiBold == "\e[1m"
     check ColorRepo == "\e[95m"
@@ -43,13 +43,13 @@ suite "Types - Constants":
     check ColorPrompt == "\e[36m"
     check ColorHighlightBg == "\e[48;5;235m"
 
-  test "Constantes de modo":
+  test "Mode constants":
     check ColorModeLocal == "\e[1;32m"
     check ColorModeAur == "\e[1;35m"
     check ColorModeNimble == "\e[1;33m"
     check ColorModeReview == "\e[1;33m"
 
-  test "Constantes de tamaño":
+  test "Size constants":
     check DetailsCacheLimit == 16
     check BatchSize == 64 * 1024
 
@@ -69,12 +69,12 @@ suite "Types - Constants":
     check MsgError.ord == 4
 
 suite "Types - Initialization":
-  test "PackageHot inicializado":
+  test "PackageHot initialized":
     var hot = PackageHot(locators: newSeq[uint32](), nameLens: newSeq[uint8]())
     check hot.locators.len == 0
     check hot.nameLens.len == 0
 
-  test "PackageCold inicializado":
+  test "PackageCold initialized":
     var cold = PackageCold(
       verLens: newSeq[uint8](), repoIndices: newSeq[uint8](), flags: newSeq[uint8]()
     )
@@ -82,7 +82,7 @@ suite "Types - Initialization":
     check cold.repoIndices.len == 0
     check cold.flags.len == 0
 
-  test "PackageSOA inicializado":
+  test "PackageSOA initialized":
     var soa = PackageSOA(
       hot: PackageHot(locators: @[], nameLens: @[]),
       cold: PackageCold(verLens: @[], repoIndices: @[], flags: @[]),
@@ -90,16 +90,16 @@ suite "Types - Initialization":
     check soa.hot.locators.len == 0
     check soa.cold.verLens.len == 0
 
-  test "ResultsBuffer inicializado":
+  test "ResultsBuffer initialized":
     var buf: ResultsBuffer
     check buf.count == 0
 
-  test "StringArena inicializado":
+  test "StringArena initialized":
     var arena = StringArena(buffer: newSeq[char](1024), capacity: 1024, offset: 0)
     check arena.capacity == 1024
     check arena.offset == 0
 
-  test "PackageDB inicializado":
+  test "PackageDB initialized":
     var db = PackageDB(
       soa: PackageSOA(
         hot: PackageHot(locators: @[], nameLens: @[]),
@@ -121,7 +121,7 @@ suite "Types - Memory Layout":
     hot.locators = @[uint32(100), uint32(200), uint32(300)]
     hot.nameLens = @[uint8(3), uint8(4), uint8(5)]
 
-    # Verificar separación de arrays
+    # Verify array separation
     check hot.locators.len == hot.nameLens.len
     check addr(hot.locators[0]) != addr(hot.nameLens[0])
 
@@ -134,14 +134,14 @@ suite "Types - Memory Layout":
     check cold.verLens.len == cold.repoIndices.len
     check cold.repoIndices.len == cold.flags.len
 
-  test "StringArena - buffer contiguo":
+  test "StringArena - contiguous buffer":
     var arena = StringArena(buffer: newSeq[char](1024), capacity: 1024, offset: 0)
     arena.offset = 100
 
     check arena.offset < arena.capacity
 
-  test "ResultsBuffer - tamaño fijo en stack":
+  test "ResultsBuffer - fixed size in stack":
     var buf: ResultsBuffer
-    # Verificar que indices y scores tienen tamaño fijo
+    # Verify that indices and scores have fixed size
     check buf.indices.len == 2000
     check buf.scores.len == 2000

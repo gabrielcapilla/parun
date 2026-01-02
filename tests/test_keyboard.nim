@@ -10,36 +10,36 @@ import ../src/ui/keyboard
 import ../src/core/types
 
 suite "Keyboard - Function Signatures":
-  test "getKeyAsync - existe":
-    # Verificar que la función existe
+  test "getKeyAsync - exists":
+    # Verify that function exists
     when declared(getKeyAsync):
       check true
     else:
       check false
 
-  test "parseSpecialKeySequence - existe":
-    # Verificar que la función existe
+  test "parseSpecialKeySequence - exists":
+    # Verify that function exists
     when declared(parseSpecialKeySequence):
       check true
     else:
       check false
 
-  test "parseCsiSequence - existe":
-    # Verificar que la función existe
+  test "parseCsiSequence - exists":
+    # Verify that function exists
     when declared(parseCsiSequence):
       check true
     else:
       check false
 
-  test "parseSs3Sequence - existe":
-    # Verificar que la función existe
+  test "parseSs3Sequence - exists":
+    # Verify that function exists
     when declared(parseSs3Sequence):
       check true
     else:
       check false
 
-  test "readByte - existe":
-    # Verificar que la función existe
+  test "readByte - exists":
+    # Verify that function exists
     when declared(readByte):
       check true
     else:
@@ -115,9 +115,9 @@ suite "Keyboard - POSIX Constants":
     check O_NONBLOCK > 0
 
 suite "Keyboard - fcntl Operations":
-  test "fcntl function - disponible":
+  test "fcntl function - available":
     discard fcntl(STDIN_FILENO, F_GETFL, 0)
-    # Si retorna -1, stdin no está disponible (OK en este entorno)
+    # If returns -1, stdin is not available (OK in this environment)
     check true
 
   test "O_NONBLOCK bitwise OR":
@@ -131,8 +131,8 @@ suite "Keyboard - fcntl Operations":
     check (flagsWithoutNonBlock and O_NONBLOCK) == 0
 
 suite "Keyboard - ReadByte Logic":
-  test "readByte - existe (compilacion)":
-    # Verificar que readByte compila
+  test "readByte - exists (compilation)":
+    # Verify that readByte compiles
     when compiles(readByte()):
       check true
     else:
@@ -248,8 +248,8 @@ suite "Keyboard - Complex Sequences":
     check ord('~') == 126
 
 suite "Keyboard - Edge Cases":
-  test "ASCII range - bytes fuera de rango":
-    # Bytes > 126 no son ASCII válido
+  test "ASCII range - bytes out of range":
+    # Bytes > 126 are not valid ASCII
     for i in 127 .. 255:
       check chr(i).ord >= 127
 
@@ -260,12 +260,12 @@ suite "Keyboard - Edge Cases":
     check KeyBack == char(127)
 
   test "Unicode fallback - bytes > 127":
-    # Los bytes > 127 se pasan como raw chars
+    # Bytes > 127 are passed as raw chars
     for i in 128 .. 255:
       check chr(i).ord >= 128
 
-  test "Secuencias de escape desconocidas":
-    # Secuencias que no matchean retornan KeyNull
+  test "Unknown escape sequences":
+    # Sequences that don't match return KeyNull
     check KeyNull == char(0)
 
 suite "Keyboard - Input Categories":
@@ -323,10 +323,10 @@ suite "Keyboard - Performance":
     check elapsed.inMilliseconds < 10 # < 10ms
 
 suite "Keyboard - Module Dependencies":
-  test "posix module - disponible":
-    check true # Si compila, el módulo está disponible
+  test "posix module - available":
+    check true # If compiles, the module is available
 
-  test "types module - exportado":
-    # Verificar que las constantes de tecla están disponibles
+  test "types module - exported":
+    # Verify that key constants are available
     check KeyUp.ord == 200
     check KeyDown.ord == 201

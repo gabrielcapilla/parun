@@ -3,15 +3,15 @@ import std/[monotimes, times, strutils]
 import ../src/utils/nUtils
 
 suite "nUtils - getRawBaseUrl":
-  test "GitHub URL estándar":
+  test "Standard GitHub URL":
     check getRawBaseUrl("https://github.com/user/repo.git") ==
       "https://raw.githubusercontent.com/user/repo"
 
-  test "GitHub URL con trailing slash":
+  test "GitHub URL with trailing slash":
     check getRawBaseUrl("https://github.com/user/repo/") ==
       "https://raw.githubusercontent.com/user/repo"
 
-  test "GitHub URL con (git) suffix":
+  test "GitHub URL with (git) suffix":
     check getRawBaseUrl("https://github.com/user/repo (git)") ==
       "https://raw.githubusercontent.com/user/repo"
 
@@ -27,23 +27,23 @@ suite "nUtils - getRawBaseUrl":
     check getRawBaseUrl("https://git.sr.ht/~user/repo") ==
       "https://git.sr.ht/~user/repo/blob"
 
-  test "URL no soportada retorna vacío":
+  test "Unsupported URL returns empty":
     check getRawBaseUrl("https://bitbucket.org/user/repo") == ""
 
-  test "URL vacía":
+  test "Empty URL":
     check getRawBaseUrl("") == ""
 
-  test "URL con múltiples slashes":
-    # Nota: La función solo elimina un slash, no múltiples
+  test "URL with multiple slashes":
+    # Note: The function only removes one slash, not multiple
     check getRawBaseUrl("https://github.com/user/repo///") ==
       "https://raw.githubusercontent.com/user/repo//"
 
-  test "URL con espacios":
+  test "URL with spaces":
     check getRawBaseUrl("  https://github.com/user/repo.git  ") ==
       "https://raw.githubusercontent.com/user/repo"
 
 suite "nUtils - parseNimbleInfo":
-  test "Archivo nimble básico":
+  test "Basic nimble file":
     let raw =
       """
       # Comment
@@ -57,7 +57,7 @@ suite "nUtils - parseNimbleInfo":
     check result.contains("Version        : 1.0.0")
     check result.contains("Author         : Test Author")
 
-  test "Archivo nimble con requires":
+  test "Nimble file with requires":
     let raw =
       """
       requires "nim >= 2.0", "stdlib"
@@ -68,7 +68,7 @@ suite "nUtils - parseNimbleInfo":
     check result.contains("- nim >= 2.0")
     check result.contains("- stdlib")
 
-  test "Requires con paréntesis":
+  test "Requires with parentheses":
     let raw =
       """
       requires ("nim >= 2.0", "stdlib")
@@ -77,12 +77,12 @@ suite "nUtils - parseNimbleInfo":
     let result = parseNimbleInfo(raw, "pkgname", "url", @[])
     check result.contains("Requires")
 
-  test "Archivo vacío":
+  test "Empty file":
     let result = parseNimbleInfo("", "pkgname", "url", @[])
     check result.contains("Name           : pkgname")
     check result.contains("URL            : url")
 
-  test "Comillas en valores":
+  test "Quotes in values":
     let raw =
       """
       version = "1.0.0"
@@ -91,7 +91,7 @@ suite "nUtils - parseNimbleInfo":
     let result = parseNimbleInfo(raw, "pkgname", "url", @[])
     check result.contains("Test Author")
 
-  test "Múltiples comentarios":
+  test "Multiple comments":
     let raw =
       """
       # Comment 1
@@ -103,7 +103,7 @@ suite "nUtils - parseNimbleInfo":
     check result.contains("Version        : 1.0.0")
 
 suite "nUtils - formatFallbackInfo":
-  test "Output de nimble search":
+  test "Output from nimble search":
     let raw =
       """
 pkgname:
@@ -118,7 +118,7 @@ pkgname:
     check result.contains("Version        : 1.0.0")
     check result.contains("(Info from local nimble search cache)")
 
-  test "Líneas vacías ignoradas":
+  test "Empty lines ignored":
     let raw =
       """
 
@@ -130,7 +130,7 @@ pkgname:
     let result = formatFallbackInfo(raw)
     check result.contains("Name")
 
-  test "Sin colon en nombre de paquete":
+  test "No colon in package name":
     let raw =
       """
       pkgname version: 1.0.0
@@ -139,15 +139,15 @@ pkgname:
     check result.contains("(Info from local nimble search cache)")
 
 suite "nUtils - Performance":
-  test "Benchmark getRawBaseUrl (1000 iteraciones)":
+  test "Benchmark getRawBaseUrl (1000 iterations)":
     let url = "https://github.com/user/repo.git"
     let start = getMonoTime()
     for i in 0 ..< 1000:
       discard getRawBaseUrl(url)
     let elapsed = getMonoTime() - start
-    check elapsed.inMilliseconds < 10 # Debe ser < 10ms
+    check elapsed.inMilliseconds < 10 # Should be < 10ms
 
-  test "Benchmark parseNimbleInfo archivo grande":
+  test "Benchmark parseNimbleInfo large file":
     var raw = ""
     for i in 0 ..< 100:
       raw &= "field" & $i & " = \"value" & $i & "\"\n"
@@ -155,4 +155,4 @@ suite "nUtils - Performance":
     for i in 0 ..< 100:
       discard parseNimbleInfo(raw, "pkgname", "url", @[])
     let elapsed = getMonoTime() - start
-    check elapsed.inMilliseconds < 100 # Debe ser < 100ms
+    check elapsed.inMilliseconds < 100 # Should be < 100ms

@@ -43,7 +43,7 @@ suite "SIMD - scorePackageSimd":
     buf.setLen(256)
     let ptrBuf = cast[ptr char](addr buf[0])
 
-  test "Match exacto al inicio - score máximo":
+  test "Exact match at start - max score":
     buf.setLen(256)
     buf[0] = 'v'
     buf[1] = 'i'
@@ -52,14 +52,14 @@ suite "SIMD - scorePackageSimd":
     let score = scorePackageSimd(ptrBuf, 3, ctx)
     check score > 140
 
-  test "Match exacto en el medio":
+  test "Exact match in the middle":
     buf.setLen(256)
     buf[0 .. 12] = "neovim-editor"
     let ctx = prepareSearchContext("vim")
     let score = scorePackageSimd(ptrBuf, 13, ctx)
     check score >= 100
 
-  test "Match después de separador":
+  test "Match after separator":
     buf.setLen(256)
     buf[0 .. 5] = "neovim"
     let ctx = prepareSearchContext("vim")
@@ -73,26 +73,26 @@ suite "SIMD - scorePackageSimd":
     let score = scorePackageSimd(ptrBuf, 5, ctx)
     check score == 0
 
-  test "Query más largo que texto":
+  test "Query longer than text":
     buf.setLen(256)
     buf[0 .. 2] = "vim"
     let ctx = prepareSearchContext("vim-editor")
     let score = scorePackageSimd(ptrBuf, 3, ctx)
     check score == 0
 
-  test "Mayúsculas/Minúsculas insensibles":
+  test "Case insensitive":
     buf.setLen(256)
     buf[0 .. 2] = "VIM"
     let ctx = prepareSearchContext("vim")
     let score = scorePackageSimd(ptrBuf, 3, ctx)
     check score > 140
 
-  test "Texto vacío":
+  test "Empty text":
     let ctx = prepareSearchContext("vim")
     let score = scorePackageSimd(ptrBuf, 0, ctx)
     check score == 0
 
-  test "Context inválido":
+  test "Invalid context":
     let ctx = prepareSearchContext("")
     let score = scorePackageSimd(ptrBuf, 10, ctx)
     check score == 0
@@ -104,7 +104,7 @@ suite "SIMD - countingSortResults":
     countingSortResults(buf)
     check buf.count == 0
 
-  test "Orden ascendente - ya ordenado":
+  test "Ascending order - already sorted":
     var buf: ResultsBuffer
     buf.count = 3
     buf.indices[0] = int32(0)
@@ -118,7 +118,7 @@ suite "SIMD - countingSortResults":
     check buf.scores[1] == 200
     check buf.scores[2] == 100
 
-  test "Orden descendente - inversión":
+  test "Descending order - inversion":
     var buf: ResultsBuffer
     buf.count = 3
     buf.indices[0] = int32(0)
@@ -132,7 +132,7 @@ suite "SIMD - countingSortResults":
     check buf.scores[1] == 200
     check buf.scores[2] == 100
 
-  test "Orden aleatorio":
+  test "Random order":
     var buf: ResultsBuffer
     buf.count = 5
     buf.indices[0] = int32(3)
@@ -167,7 +167,7 @@ suite "SIMD - Fuzzing":
       check true
 
 suite "SIMD - Performance Benchmarks":
-  test "Benchmark scorePackageSimd 100K iteraciones":
+  test "Benchmark scorePackageSimd 100K iterations":
     var buf = newString(256)
     buf.setLen(256)
     let ptrBuf = cast[ptr char](addr buf[0])
@@ -182,7 +182,7 @@ suite "SIMD - Performance Benchmarks":
 
     check elapsed.inMilliseconds < 100
 
-  test "Benchmark countingSortResults 2000 elementos":
+  test "Benchmark countingSortResults 2000 elements":
     var buf: ResultsBuffer
     buf.count = 2000
     for i in 0 ..< 2000:

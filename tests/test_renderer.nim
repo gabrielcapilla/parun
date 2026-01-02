@@ -54,7 +54,7 @@ suite "Renderer - StatusBar":
     check cursorX >= 2
     check cursorX <= 100
 
-  test "renderStatusBar - width 50 (minimo)":
+  test "renderStatusBar - width 50 (minimum)":
     var state = newState(ModeLocal, false, false)
     var buffer = ""
     let cursorX = renderStatusBar(buffer, state, 50)
@@ -63,7 +63,7 @@ suite "Renderer - StatusBar":
     check cursorX >= 2
     check cursorX <= 50
 
-  test "renderStatusBar - con search buffer":
+  test "renderStatusBar - with search buffer":
     var state = newState(ModeLocal, false, false)
     state.searchBuffer = "test"
     state.searchCursor = 4
@@ -73,7 +73,7 @@ suite "Renderer - StatusBar":
     check buffer.contains("test")
     check cursorX >= 2 + visibleWidth("test")
 
-  test "renderStatusBar - con packages seleccionados":
+  test "renderStatusBar - with selected packages":
     var state = newState(ModeLocal, false, false)
     state.visibleIndices = @[int32(0), int32(1), int32(2)]
     state.toggleSelection(int(0))
@@ -81,9 +81,9 @@ suite "Renderer - StatusBar":
     var buffer = ""
     discard renderStatusBar(buffer, state, 100)
 
-    check buffer.contains("[2]") # 2 seleccionados
+    check buffer.contains("[2]") # 2 selected
 
-  test "renderStatusBar - modo viewingSelection":
+  test "renderStatusBar - viewingSelection mode":
     var state = newState(ModeLocal, false, false)
     state.viewingSelection = true
     var buffer = ""
@@ -91,28 +91,28 @@ suite "Renderer - StatusBar":
 
     check buffer.contains("[Rev]")
 
-  test "renderStatusBar - modo Nimble":
+  test "renderStatusBar - Nimble mode":
     var state = newState(ModeLocal, false, true)
     var buffer = ""
     discard renderStatusBar(buffer, state, 100)
 
     check buffer.contains("[Nimble]")
 
-  test "renderStatusBar - modo AUR":
+  test "renderStatusBar - AUR mode":
     var state = newState(ModeAUR, false, false)
     var buffer = ""
     discard renderStatusBar(buffer, state, 100)
 
     check buffer.contains("[Aur]")
 
-  test "renderStatusBar - modo Local":
+  test "renderStatusBar - Local mode":
     var state = newState(ModeLocal, false, false)
     var buffer = ""
     discard renderStatusBar(buffer, state, 100)
 
     check buffer.contains("[Local]")
 
-  test "renderStatusBar - con status message":
+  test "renderStatusBar - with status message":
     var state = newState(ModeLocal, false, false)
     state.statusMessage = "Loading..."
     var buffer = ""
@@ -120,17 +120,17 @@ suite "Renderer - StatusBar":
 
     check buffer.contains("Loading...")
 
-  test "renderStatusBar - cursor position correcto":
+  test "renderStatusBar - correct cursor position":
     var state = newState(ModeLocal, false, false)
     state.searchBuffer = "test"
-    state.searchCursor = 2 # Cursor en 's'
+    state.searchCursor = 2 # Cursor on 's'
     var buffer = ""
     let cursorX = renderStatusBar(buffer, state, 100)
 
     check cursorX == 2 + 2 # '> ' + 'te'
     discard cursorX # Evitar warning
 
-  test "renderStatusBar - cursor al inicio":
+  test "renderStatusBar - cursor at start":
     var state = newState(ModeLocal, false, false)
     state.searchBuffer = "test"
     state.searchCursor = 0
@@ -139,7 +139,7 @@ suite "Renderer - StatusBar":
 
     check cursorX == 2 # '> '
 
-  test "renderStatusBar - cursor al final":
+  test "renderStatusBar - cursor at end":
     var state = newState(ModeLocal, false, false)
     state.searchBuffer = "test"
     state.searchCursor = 4
@@ -149,7 +149,7 @@ suite "Renderer - StatusBar":
     check cursorX == 2 + visibleWidth("test")
 
 suite "Renderer - Details Panel":
-  test "renderDetails - fila superior (box top)":
+  test "renderDetails - top row (box top)":
     var state = newState(ModeLocal, false, false)
     var buffer = ""
     renderDetails(buffer, state, 0, 10, 50)
@@ -158,7 +158,7 @@ suite "Renderer - Details Panel":
     check buffer.contains(BoxTopRight)
     check buffer.contains(BoxHor)
 
-  test "renderDetails - fila inferior (box bottom)":
+  test "renderDetails - bottom row (box bottom)":
     var state = newState(ModeLocal, false, false)
     var buffer = ""
     renderDetails(buffer, state, 9, 10, 50)
@@ -167,7 +167,7 @@ suite "Renderer - Details Panel":
     check buffer.contains(BoxBottomRight)
     check buffer.contains(BoxHor)
 
-  test "renderDetails - fila del medio (box sides)":
+  test "renderDetails - middle row (box sides)":
     var state = newState(ModeLocal, false, false)
     var buffer = ""
     renderDetails(buffer, state, 5, 10, 50)
@@ -175,7 +175,7 @@ suite "Renderer - Details Panel":
     check buffer.contains(BoxVer)
     check buffer.contains(ColorFrame)
 
-  test "renderDetails - sin paquetes visibles":
+  test "renderDetails - no visible packages":
     var state = newState(ModeLocal, false, false)
     state.visibleIndices = @[]
     var buffer = ""
@@ -183,7 +183,7 @@ suite "Renderer - Details Panel":
 
     check buffer.contains(BoxVer)
 
-  test "renderDetails - con cache vacio":
+  test "renderDetails - with empty cache":
     var state = newState(ModeLocal, false, false)
     state.visibleIndices = @[int32(0)]
     var buffer = ""
@@ -191,19 +191,19 @@ suite "Renderer - Details Panel":
 
     check buffer.contains("...")
 
-  test "renderDetails - truncamiento de linea larga":
+  test "renderDetails - truncation of long line":
     var state = newState(ModeLocal, false, false)
     state.visibleIndices = @[int32(0)]
     var buffer = ""
     renderDetails(buffer, state, 1, 10, 20)
 
-    check buffer.len >= 4 # Al menos 4 caracteres de box
-    check buffer.contains("...") # No hay cache, muestra "..."
+    check buffer.len >= 4 # At least 4 box characters
+    check buffer.contains("...") # No cache, shows "..."
 
 suite "Renderer - Append Row":
-  test "appendRow - con cursor y sin seleccion":
+  test "appendRow - with cursor and no selection":
     var state = newState(ModeLocal, false, false)
-    # Inicializar con datos minimos
+    # Initialize with minimal data
     state.soa.hot.locators = @[uint32(0)]
     state.soa.hot.nameLens = @[uint8(4)]
     state.soa.cold.verLens = @[uint8(5)]
@@ -220,9 +220,9 @@ suite "Renderer - Append Row":
     appendRow(buffer, state, int32(0), 80, true, false)
 
     check buffer.len > 0
-    check buffer.contains(PrefixLUT[2]) # Cursor sin seleccion
+    check buffer.contains(PrefixLUT[2]) # Cursor without selection
 
-  test "appendRow - sin cursor y con seleccion":
+  test "appendRow - no cursor and with selection":
     var state = newState(ModeLocal, false, false)
     state.soa.hot.locators = @[uint32(0)]
     state.soa.hot.nameLens = @[uint8(4)]
@@ -239,9 +239,9 @@ suite "Renderer - Append Row":
     var buffer = ""
     appendRow(buffer, state, int32(0), 80, false, true)
 
-    check buffer.contains(PrefixLUT[1]) # Seleccionado sin cursor
+    check buffer.contains(PrefixLUT[1]) # Selected without cursor
 
-  test "appendRow - con ambos (cursor y seleccion)":
+  test "appendRow - with both (cursor and selection)":
     var state = newState(ModeLocal, false, false)
     state.soa.hot.locators = @[uint32(0)]
     state.soa.hot.nameLens = @[uint8(4)]
@@ -258,9 +258,9 @@ suite "Renderer - Append Row":
     var buffer = ""
     appendRow(buffer, state, int32(0), 80, true, true)
 
-    check buffer.contains(PrefixLUT[3]) # Ambos
+    check buffer.contains(PrefixLUT[3]) # Both
 
-  test "appendRow - sin nada":
+  test "appendRow - none":
     var state = newState(ModeLocal, false, false)
     state.soa.hot.locators = @[uint32(0)]
     state.soa.hot.nameLens = @[uint8(4)]
@@ -280,16 +280,15 @@ suite "Renderer - Append Row":
     check buffer.contains(PrefixLUT[0]) # Normal
 
 suite "Renderer - Edge Cases":
-  test "renderStatusBar - width muy pequeno (50)":
+  test "renderStatusBar - very small width (50)":
     var state = newState(ModeLocal, false, false)
     state.searchBuffer = "very long search string that exceeds width"
     var buffer = ""
     let cursorX = renderStatusBar(buffer, state, 50)
 
-    check buffer.len <= 50 + 50
-      # ANSI codes no cuentan para len, pero pueden exceder width
+    check buffer.len <= 50 + 50 # ANSI codes don't count for len, but may exceed width
 
-  test "renderStatusBar - buffer vacio":
+  test "renderStatusBar - empty buffer":
     var state = newState(ModeLocal, false, false)
     state.searchBuffer = ""
     state.searchCursor = 0
@@ -304,9 +303,9 @@ suite "Renderer - Edge Cases":
     var buffer = ""
     renderDetails(buffer, state, 1, 10, 0)
 
-    check buffer.len > 0 # Debería tener al menos los caracteres de box
+    check buffer.len > 0 # Should have at least box characters
 
-  test "renderDetails - listHeight = 1 (solo top y bottom)":
+  test "renderDetails - listHeight = 1 (top and bottom only)":
     var state = newState(ModeLocal, false, false)
     var buffer1 = ""
     var buffer2 = ""
@@ -315,9 +314,9 @@ suite "Renderer - Edge Cases":
 
     check buffer1.contains(BoxTopLeft)
     check buffer1.contains(BoxTopRight)
-    # Ambas llamadas con r=0 deberían mostrar lo mismo (top)
+    # Both calls with r=0 should show the same (top)
 
-  test "PrefixLUT indices correctos":
+  test "PrefixLUT correct indices":
     # 0: no cursor, no selected
     check PrefixLUT[0] == "  "
     # 1: no cursor, selected
@@ -331,7 +330,7 @@ suite "Renderer - Edge Cases":
     check PrefixLUT[3].contains("*")
 
 suite "Renderer - Performance":
-  test "Benchmark renderStatusBar 1K operaciones":
+  test "Benchmark renderStatusBar 1K operations":
     var state = newState(ModeLocal, false, false)
     state.searchBuffer = "test"
     var buffer = ""
@@ -344,7 +343,7 @@ suite "Renderer - Performance":
 
     check elapsed.inNanoseconds div 1_000_000 < 100 # < 100ms
 
-  test "Benchmark renderDetails 1K filas":
+  test "Benchmark renderDetails 1K rows":
     var state = newState(ModeLocal, false, false)
     var buffer = ""
 
@@ -356,7 +355,7 @@ suite "Renderer - Performance":
 
     check elapsed.inNanoseconds div 1_000_000 < 100 # < 100ms
 
-  test "Benchmark PrefixLUT access 10K operaciones":
+  test "Benchmark PrefixLUT access 10K operations":
     let start = getMonoTime()
     for i in 0 ..< 10000:
       let idx = i mod 4
@@ -366,9 +365,9 @@ suite "Renderer - Performance":
 
     check elapsed.inNanoseconds div 1_000_000 < 10 # < 10ms (array access is fast)
 
-  test "Benchmark appendRow 10K filas":
+  test "Benchmark appendRow 10K rows":
     var state = newState(ModeLocal, false, false)
-    # Inicializar con datos minimos
+    # Initialize with minimal data
     state.soa.hot.locators = @[uint32(0)]
     state.soa.hot.nameLens = @[uint8(4)]
     state.soa.cold.verLens = @[uint8(5)]

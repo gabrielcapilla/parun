@@ -16,38 +16,38 @@ suite "Terminal - Constants":
     check resizePipe.len == 2
 
 suite "Terminal - Function Existence":
-  test "initTerminal - existe":
-    # Verificar que la función compila
+  test "initTerminal - exists":
+    # Verify that function compiles
     when compiles(initTerminal()):
       check true
     else:
       check false
 
-  test "restoreTerminal - existe":
-    # Verificar que la función compila (simplemente existe en el módulo)
+  test "restoreTerminal - exists":
+    # Verify that function compiles (just exists in module)
     when declared(restoreTerminal):
       check true
     else:
       check false
 
 suite "Terminal - Termios Operations":
-  test "tcGetAttr - disponible":
-    # Verificar que tcGetAttr está disponible en std/termios
+  test "tcGetAttr - available":
+    # Verify that tcGetAttr is available in std/termios
     var term: Termios
     discard tcGetAttr(STDIN_FILENO, addr term)
     check true # Si no crashe, está disponible
 
-  test "tcSetAttr - disponible":
-    # Verificar que tcSetAttr está disponible en std/termios
+  test "tcSetAttr - available":
+    # Verify that tcSetAttr is available in std/termios
     var term: Termios
     let result = tcGetAttr(STDIN_FILENO, addr term)
 
-    # tcGetAttr puede retornar -1 si hay error
+    # tcGetAttr may return -1 on error
     if result == 0:
       discard tcSetAttr(STDIN_FILENO, TCSAFLUSH, addr term)
-      check true # Si no crashe, está disponible
+      check true # If no crash, it's available
     else:
-      # Terminal no disponible en este entorno
+      # Terminal not available in this environment
       check true
 
 suite "Terminal - POSIX Flags":
@@ -93,11 +93,11 @@ suite "Terminal - File Descriptors":
     check STDERR_FILENO == 2
 
 suite "Terminal - Signal Handling":
-  test "resizePipe - tiene 2 elementos":
+  test "resizePipe - has 2 elements":
     check resizePipe.len == 2
 
 suite "Terminal - Raw Mode Properties":
-  test "Raw mode deshabilita ICANON":
+  test "Raw mode disables ICANON":
     var term: Termios
     discard tcGetAttr(STDIN_FILENO, addr term)
 
@@ -105,7 +105,7 @@ suite "Terminal - Raw Mode Properties":
 
     check (term.c_lflag and ICANON) == 0
 
-  test "Raw mode deshabilita ECHO":
+  test "Raw mode disables ECHO":
     var term: Termios
     discard tcGetAttr(STDIN_FILENO, addr term)
 
@@ -113,7 +113,7 @@ suite "Terminal - Raw Mode Properties":
 
     check (term.c_lflag and ECHO) == 0
 
-  test "Raw mode deshabilita ISIG":
+  test "Raw mode disables ISIG":
     var term: Termios
     discard tcGetAttr(STDIN_FILENO, addr term)
 
@@ -122,36 +122,36 @@ suite "Terminal - Raw Mode Properties":
     check (term.c_lflag and ISIG) == 0
 
 suite "Terminal - Edge Cases":
-  test "initTerminal - creacion de pipe fallida":
+  test "initTerminal - pipe creation failed":
     when defined(posix):
-      doAssert true, "Requiere mocking de posix.pipe"
+      doAssert true, "Requires mocking of posix.pipe"
       skip()
     else:
-      doAssert true, "Solo en POSIX"
+      doAssert true, "POSIX only"
       skip()
 
-  test "initTerminal - configuracion de termios fallida":
+  test "initTerminal - termios configuration failed":
     when defined(posix):
-      doAssert true, "Requiere TTY real"
+      doAssert true, "Requires real TTY"
       skip()
     else:
-      doAssert true, "Solo en POSIX"
+      doAssert true, "POSIX only"
       skip()
 
-  test "restoreTerminal - termios invalido":
+  test "restoreTerminal - invalid termios":
     when defined(posix):
-      doAssert true, "Requiere TTY real"
+      doAssert true, "Requires real TTY"
       skip()
     else:
-      doAssert true, "Solo en POSIX"
+      doAssert true, "POSIX only"
       skip()
 
-  test "resizePipe - inicializacion":
-    # Verificar que resizePipe está inicializado
+  test "resizePipe - initialization":
+    # Verify that resizePipe is initialized
     check resizePipe.len == 2
 
 suite "Terminal - Performance":
-  test "Benchmark tcGetAttr 1000 llamadas":
+  test "Benchmark tcGetAttr 1000 calls":
     var term: Termios
     let start = getTime()
 
@@ -161,7 +161,7 @@ suite "Terminal - Performance":
     let elapsed = getTime() - start
     check elapsed.inMilliseconds < 100 # < 100ms
 
-  test "Benchmark termios flag manipulation 10K operaciones":
+  test "Benchmark termios flag manipulation 10K operations":
     var term: Termios
     discard tcGetAttr(STDIN_FILENO, addr term)
 
