@@ -1,5 +1,5 @@
 import std/[tables, strutils, unittest]
-import ../src/utils/pUtils
+import ../src/utils/pacman
 
 suite "Test":
   test "Test":

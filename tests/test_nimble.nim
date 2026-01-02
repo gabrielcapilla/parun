@@ -1,8 +1,8 @@
 import unittest
 import std/[monotimes, times, strutils]
-import ../src/utils/nUtils
+import ../src/utils/nimble
 
-suite "nUtils - getRawBaseUrl":
+suite "nimble - getRawBaseUrl":
   test "Standard GitHub URL":
     check getRawBaseUrl("https://github.com/user/repo.git") ==
       "https://raw.githubusercontent.com/user/repo"
@@ -42,7 +42,7 @@ suite "nUtils - getRawBaseUrl":
     check getRawBaseUrl("  https://github.com/user/repo.git  ") ==
       "https://raw.githubusercontent.com/user/repo"
 
-suite "nUtils - parseNimbleInfo":
+suite "nimble - parseNimbleInfo":
   test "Basic nimble file":
     let raw =
       """
@@ -102,7 +102,7 @@ suite "nUtils - parseNimbleInfo":
     let result = parseNimbleInfo(raw, "pkgname", "url", @[])
     check result.contains("Version        : 1.0.0")
 
-suite "nUtils - formatFallbackInfo":
+suite "nimble - formatFallbackInfo":
   test "Output from nimble search":
     let raw =
       """
@@ -138,7 +138,7 @@ pkgname:
     let result = formatFallbackInfo(raw)
     check result.contains("(Info from local nimble search cache)")
 
-suite "nUtils - Performance":
+suite "nimble - Performance":
   test "Benchmark getRawBaseUrl (1000 iterations)":
     let url = "https://github.com/user/repo.git"
     let start = getMonoTime()

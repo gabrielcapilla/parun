@@ -1,8 +1,8 @@
 import unittest
 import std/[monotimes, times, strutils, tables]
-import ../src/utils/pUtils
+import ../src/utils/pacman
 
-suite "pUtils - parseInstalledPackages":
+suite "pacman - parseInstalledPackages":
   test "Standard pacman -Q output":
     let output =
       """
@@ -54,7 +54,7 @@ linux-firmware 1.0.0
     let result = parseInstalledPackages(output)
     check result["complex-pkg"] == "2.1.0-beta.3+20241201-1"
 
-suite "pUtils - isPackageInstalled":
+suite "pacman - isPackageInstalled":
   test "[installed] marker in English":
     check isPackageInstalled("core pacman 6.0.2-2 [installed]") == true
 
@@ -81,7 +81,7 @@ suite "pUtils - isPackageInstalled":
   test "Marker only":
     check isPackageInstalled("[installed]") == true
 
-suite "pUtils - Performance":
+suite "pacman - Performance":
   test "Benchmark parseInstalledPackages 10K packages":
     var output = ""
     for i in 0 ..< 10000:
