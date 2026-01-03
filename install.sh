@@ -75,7 +75,7 @@ function check_existing_installation() {
 		printf >&2 "%b Do you want to update it? [y/N]: " "${A}"
 
 		local response
-		read -r response
+		read -r response </dev/tty
 
 		if [[ "${response}" != "y" && "${response}" != "Y" ]]; then
 			printf >&2 "%b Installation cancelled\n" "${S}"
