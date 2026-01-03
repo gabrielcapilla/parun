@@ -1,107 +1,63 @@
 # Parun
 
-**Parun** is a modern, high-performance Terminal User Interface (TUI) for package management, designed for **Arch Linux** and the **Nim** ecosystem.
+A powerful terminal-based package manager for Pacman, AUR, and Nimble
 
-<div align="center">
-  <img src="preview.webp" alt="Example output of Parun"/>
-  <br>
-</div>
+![preview](preview.webp)
 
-Written in [Nim](https://github.com/nim-lang/Nim) and optimized with SIMD instructions, Parun offers a blazing fast search and management experience for Pacman, AUR (Arch User Repository), and Nimble repositories.
+## Features
 
-## Key Features
+- Unified management: Pacman, AUR, and Nimble packages
+- Multi-selection and batch operations
+- Real-time search with package details
 
-- **Extreme Performance**: Uses `nimsimd` for hardware-accelerated text filtering and searching.
-- **Unified Management**: Manage system packages (Pacman), community packages (AUR), and Nim language packages (Nimble) from a single interface.
-- **Multi-Selection**: Select multiple packages to install or uninstall in batches.
-- **Intuitive Interface**: Real-time searching, package details view, and fluid keyboard navigation.
-- **Details Mode**: View extended package information (version, description, license, etc.).
+## Install
 
-## Requirements
-
-- **OS**: Arch Linux or Arch Linux based distro
-- **Nim**: [Install Nim](https://nim-lang.org/)
-
-<!--## Installation-->
-
-<!--The easiest way to install Parun is using `nimble`:
+**Quick install (binary):**
 
 ```bash
-nimble install https://github.com/gabrielcapilla/parun.git
-```-->
+curl -fsSL gabrielcapilla.github.io/install | bash -s parun
+```
 
-## Build
+**Or install with Nimble (requires Nim):**
 
-Compile the project from source and generate an optimized release version:
-
-1.  Clone the repository:
-
-    ```bash
-    git clone https://github.com/gabrielcapilla/parun.git
-    cd parun
-    ```
-
-2.  Run the defined build task (requires `nimble`):
-
-    ```bash
-    nimble release
-    ```
-
-3.  Install in your local folder bin:
-    ```bash
-    mv parun $HOME/.local/bin
-    ```
+```bash
+nimble install https://github.com/gabrielcapilla/parun.git@#head
+```
 
 ## Usage
 
-To start the application, simply run:
-
 ```bash
-parun
+parun              # Start in default mode
+parun --nimble     # Start in Nimble mode
+parun --noinfo     # Hide details panel
 ```
 
-### Command Line Options
+### Navigation
 
-You can launch Parun in specific modes or with initial configurations:
+- **Arrow keys** · Move through packages
+- **PgUp / PgDn** · Scroll by pages
+- **F1** · Toggle details panel
+- **Esc** · Quit
 
-| Option              | Description                                   |
-| :------------------ | :-------------------------------------------- |
-| `-n`, `--noinfo`    | Start with the package details panel hidden.  |
-| `--nim`, `--nimble` | Start directly in Nimble package search mode. |
+### Package Management
 
-### Keyboard Shortcuts & Controls
+- **Tab** · Select/deselect package for batch operations
+- **Enter** · Install highlighted package, or all selected packages
+- **Ctrl+R** · Remove selected packages
+- **Ctrl+S** · Show only selected
 
-Once inside the application, use the following controls to navigate and manage packages:
+### Quick Search
 
-**Navigation & Search**
+Type prefixes to switch between package sources:
 
-- **Typing**: Filter the package list in real-time.
-- **Up / Down Arrows**: Move the cursor through the package list.
-- **PgUp / PgDn**: Scroll by pages.
-- **F1**: Show/Hide the package details panel.
-- **Esc**: Quit the application.
-
-**Package Management**
-
-- **Tab**: Select/Deselect the current package (for multi-selection).
-- **Enter**: Install selected packages (or the current one if no selection).
-- **Ctrl + R**: Uninstall (Remove) selected packages.
-- **Ctrl + S**: Toggle view to show only selected packages.
-
-**Quick Search Commands**
-You can switch package sources by typing special prefixes in the search bar:
-
-- `aur/` : Switch to AUR search.
-- `nim/` or `nimble/` : Switch to Nimble search.
-- Any other input returns to the default mode (System Packages/Local).
+- **aur/** · Search AUR packages
+- **nim/** · Search Nimble packages
 
 ---
 
-_Parun does not require an external configuration file. However, it internally interacts with `pacman`, `paru`, `yay`, and `nimble` commands. Ensure these are installed._
+Parun internally uses `pacman`, `paru`/`yay`, and `nimble` commands.
 
----
+#### Repository & Support
 
-## Repository & Support
-
-- **GitHub:** [gabrielcapilla/parun](https://github.com/gabrielcapilla/parun)
-- **Nostr:** [@gabrielcapilla](https://nostree.me/npub1uf2dtc8wfpd7g4papst44uy0yzlnud54tzglhffrr3yvh6hnjefq4uy52e)
+- [GitHub](https://github.com/gabrielcapilla/parun)
+- [Nostr](https://nostree.me/npub1uf2dtc8wfpd7g4papst44uy0yzlnud54tzglhffrr3yvh6hnjefq4uy52e)
