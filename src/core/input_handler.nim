@@ -7,7 +7,6 @@ func deleteCharLeft*(state: var AppState) =
   if state.searchCursor > 0:
     state.searchBuffer.delete(state.searchCursor - 1 .. state.searchCursor - 1)
     state.searchCursor.dec()
-    filterIndices(state, state.searchBuffer, state.visibleIndices)
     state.cursor = 0
 
 func deleteWordLeft*(state: var AppState) =
@@ -52,6 +51,7 @@ func deleteWordLeft*(state: var AppState) =
       '`',
       '?',
       '.',
+      '=',
     }:
       dec(wordStart)
     else:
@@ -60,13 +60,11 @@ func deleteWordLeft*(state: var AppState) =
   if wordStart < originalCursor:
     state.searchBuffer.delete(wordStart .. originalCursor - 1)
     state.searchCursor = wordStart
-    filterIndices(state, state.searchBuffer, state.visibleIndices)
     state.cursor = 0
 
 func deleteCharRight*(state: var AppState) =
   if state.searchCursor < state.searchBuffer.len:
     state.searchBuffer.delete(state.searchCursor .. state.searchCursor)
-    filterIndices(state, state.searchBuffer, state.visibleIndices)
     state.cursor = 0
 
 func insertChar*(state: var AppState, c: char) =
@@ -74,7 +72,6 @@ func insertChar*(state: var AppState, c: char) =
     state.viewingSelection = false
   state.searchBuffer.insert($c, state.searchCursor)
   state.searchCursor.inc()
-  filterIndices(state, state.searchBuffer, state.visibleIndices)
   state.cursor = 0
 
 func moveCursorWordLeft*(state: var AppState) =

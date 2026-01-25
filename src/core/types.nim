@@ -6,13 +6,13 @@
 ##    from rarely accessed data (details/rendering).
 ## 3. **Arenas:** Using contiguous buffers for strings to avoid fragmentation and GC.
 
-import std/[tables, monotimes]
+import std/[tables, monotimes, strutils]
 
 const
   ## Max number of package details cached in RAM.
-  DetailsCacheLimit* = 16
+  DetailsCacheLimit* = 256
   ## Buffer size for thread communication batches.
-  BatchSize* = 64 * 1024
+  # BatchSize moved to worker_types.nim
 
   # Key and ANSI Constants
   KeyNull* = char(0)
@@ -98,6 +98,8 @@ type
     locators*: seq[uint32]
     ## Length of names (max 255 chars).
     nameLens*: seq[uint8]
+    ## Bitmask: bit 0 = installed. (Moved to hot for faster filtering)
+    flags*: seq[uint8]
 
   PackageCold* = object
     ## "Cold" data accessed only when rendering or viewing details.
@@ -108,8 +110,6 @@ type
     verLens*: seq[uint8]
     ## Index in the repository table (max 255 repos).
     repoIndices*: seq[uint8]
-    ## Bitmask: bit 0 = installed.
-    flags*: seq[uint8]
 
   PackageSOA* = object
     ## Main Structure of Arrays (SoA) container.
@@ -271,9 +271,36 @@ type
     ## Scroll of the details panel.
     detailScroll*: int
 
+    # Details wrapping cache
+    wrappedDetails*: seq[string]
+    lastDetailWidth*: int
+    lastDetailIdx*: int32
+
     # Optimizations
     ## Per-frame temporary arena.
     stringArena*: StringArena
     ## For debouncing.
     lastInputTime*: MonoTime
     debouncePending*: bool
+
+func isInstalled*(state: AppState, idx: int): bool {.inline, noSideEffect.} =
+  ## Checks if a package is installed using bitwise operations.
+  (state.soa.hot.flags[idx] and 1) != 0
+
+func getEffectiveQuery*(buffer: string): string {.noSideEffect.} =
+  ## Extracts the real query by removing magic prefixes and their aliases.
+  if buffer.startsWith("aur/"):
+    return buffer[4 ..^ 1]
+  if buffer.startsWith("a/"):
+    return buffer[2 ..^ 1]
+  if buffer.startsWith("nimble/"):
+    return buffer[7 ..^ 1]
+  if buffer.startsWith("nim/"):
+    return buffer[4 ..^ 1]
+  if buffer.startsWith("n/"):
+    return buffer[2 ..^ 1]
+  if buffer.startsWith("installed/"):
+    return buffer[10 ..^ 1]
+  if buffer.startsWith("i/"):
+    return buffer[2 ..^ 1]
+  return buffer

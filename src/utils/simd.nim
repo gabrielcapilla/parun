@@ -355,7 +355,7 @@ proc countingSortResults*(buf: var ResultsBuffer) =
 
   var prefixSums: array[MaxScore, uint16]
   var running: uint16 = 0
-  for s in 0 ..< MaxScore:
+  for s in countdown(MaxScore - 1, 0):
     prefixSums[s] = running
     running += counts[s]
 
@@ -369,7 +369,6 @@ proc countingSortResults*(buf: var ResultsBuffer) =
     outputScores[pos] = buf.scores[i]
     inc(prefixSums[s])
 
-  # Reverse for descending order (highest score first)
   for i in 0 ..< buf.count:
-    buf.indices[i] = outputIndices[buf.count - 1 - i]
-    buf.scores[i] = outputScores[buf.count - 1 - i]
+    buf.indices[i] = outputIndices[i]
+    buf.scores[i] = outputScores[i]

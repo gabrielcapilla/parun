@@ -6,7 +6,9 @@ import renderer
 
 type RenderResult* = tuple[cursorX: int, cursorY: int]
 
-proc renderUi*(state: AppState, buffer: var string, termH, termW: int): RenderResult =
+proc renderUi*(
+    state: var AppState, buffer: var string, termH, termW: int
+): RenderResult =
   ## Main rendering function. Fills the buffer with the complete frame.
   buffer.setLen(0)
   if termW < MinTermWidth or termH < MinTermHeight:
@@ -40,7 +42,7 @@ proc renderUi*(state: AppState, buffer: var string, termH, termW: int): RenderRe
         state.isSelected(int(realIdx)),
       )
     else:
-      buffer.add(repeat(" ", listW))
+      buffer.appendSpaces(listW)
 
     if showDetails:
       renderDetails(buffer, state, r, listH, detailTextW)

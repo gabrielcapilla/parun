@@ -1,7 +1,7 @@
 ## UI component rendering.
 ## Split from tui.nim to keep modules manageable.
 
-import std/[strformat, strutils, tables]
+import std/[strutils, tables]
 import ../core/[types, state]
 import ../utils/utils
 
@@ -25,6 +25,14 @@ const
   PrefixLen* = 2
   InstalledLen* = 12
   Spaces50* = "                                                  "
+
+proc appendSpaces*(buffer: var string, count: int) =
+  var p = count
+  while p >= 50:
+    buffer.add(Spaces50)
+    p -= 50
+  if p > 0:
+    buffer.add(Spaces50[0 ..< p])
 
 proc appendRow*(
     buffer: var string,
@@ -109,17 +117,14 @@ proc appendRow*(
   let pad = max(0, width - usedLen)
 
   if pad > 0:
-    var p = pad
-    while p >= 50:
-      buffer.add(Spaces50)
-      p -= 50
-    if p > 0:
-      buffer.add(Spaces50[0 ..< p])
+    buffer.appendSpaces(pad)
 
   if isCursor:
     buffer.add(Reset)
 
-proc renderDetails*(buffer: var string, state: AppState, r, listH, detailTextW: int) =
+proc renderDetails*(
+    buffer: var string, state: var AppState, r, listH, detailTextW: int
+) =
   ## Renders the side details panel with dynamic text wrapping.
   if r == 0:
     buffer.add(
@@ -136,23 +141,16 @@ proc renderDetails*(buffer: var string, state: AppState, r, listH, detailTextW: 
     if state.visibleIndices.len > 0:
       let curIdx = state.visibleIndices[state.cursor]
       if state.detailsCache.hasKey(curIdx):
-        # Get raw content from cache
-        let rawContent = state.detailsCache[curIdx]
-
-        # Apply dynamic wrapping based on current panel width
-        var flatLines: seq[string] = @[]
-        for line in rawContent.splitLines():
-          if visibleWidth(line) <= detailTextW:
-            flatLines.add(line)
-          else:
-            # Line needs wrapping - wrapText already returns seq[string]
-            let wrapped = wrapText(line, detailTextW)
-            for w in wrapped:
-              flatLines.add(w)
+        # Update wrapping cache if needed
+        if state.lastDetailIdx != curIdx or state.lastDetailWidth != detailTextW:
+          let rawContent = state.detailsCache[curIdx]
+          state.wrappedDetails = wrapText(rawContent, detailTextW)
+          state.lastDetailIdx = curIdx
+          state.lastDetailWidth = detailTextW
 
         let effectiveIdx = contentRowIndex + state.detailScroll
-        if effectiveIdx < flatLines.len:
-          textContent = flatLines[effectiveIdx].replace("\t", "  ")
+        if effectiveIdx < state.wrappedDetails.len:
+          textContent = state.wrappedDetails[effectiveIdx].replace("\t", "  ")
       elif contentRowIndex == 0:
         textContent = "..."
 
@@ -161,50 +159,75 @@ proc renderDetails*(buffer: var string, state: AppState, r, listH, detailTextW: 
       buffer.add(truncate(textContent, detailTextW))
     else:
       buffer.add(textContent)
-      buffer.add(repeat(" ", detailTextW - visLen))
+      buffer.appendSpaces(detailTextW - visLen)
     buffer.add(ColorFrame & BoxVer & Reset)
 
 proc renderStatusBar*(buffer: var string, state: AppState, termW: int): int =
   ## Renders the bottom status and search bar.
-  let pkgCountStr =
+  let pkgCountStrLen =
     if state.soa.hot.locators.len == 0:
-      fmt"{AnsiDim}(...){AnsiReset}"
+      5 # "(...)"
     else:
-      fmt"{AnsiDim}({state.visibleIndices.len}/{state.soa.hot.locators.len}){AnsiReset}"
+      2 + ($state.visibleIndices.len).len + 1 + ($state.soa.hot.locators.len).len
 
   let selCount = state.getSelectedCount()
-  let statusPrefix =
-    if selCount > 0:
-      fmt"{ColorSel}[{selCount}]{AnsiReset} "
-    else:
-      ""
+  var statusPrefix = ""
+  var statusPrefixLen = 0
+  if selCount > 0:
+    statusPrefix = ColorSel & "[" & $selCount & "] " & AnsiReset
+    statusPrefixLen = 3 + ($selCount).len
 
   var modeStr = ""
+  var modeStrLen = 0
   if state.viewingSelection:
-    modeStr = fmt"{ColorModeReview}[Rev]{AnsiReset}"
+    modeStr = ColorModeReview & "[Rev]" & AnsiReset
+    modeStrLen = 5
   elif state.dataSource == SourceNimble:
-    modeStr = fmt"{ColorModeNimble}[Nimble]{AnsiReset}"
+    modeStr = ColorModeNimble & "[Nimble]" & AnsiReset
+    modeStrLen = 8
   else:
     if state.searchMode == ModeAUR:
-      modeStr = fmt"{ColorModeAur}[Aur]{AnsiReset}"
+      modeStr = ColorModeAur & "[Aur]" & AnsiReset
+      modeStrLen = 5
     else:
-      modeStr = fmt"{ColorModeLocal}[Local]{AnsiReset}"
+      modeStr = ColorModeLocal & "[Local]" & AnsiReset
+      modeStrLen = 7
 
+  var statusMsgStr = ""
   if state.statusMessage.len > 0:
-    modeStr.add(fmt" {AnsiBold}{state.statusMessage}{AnsiReset}")
+    statusMsgStr = " " & AnsiBold & state.statusMessage & AnsiReset
+    modeStrLen += 1 + state.statusMessage.len
 
-  let leftSide = fmt"{ColorPrompt}>{AnsiReset} {state.searchBuffer}"
-  let cursorVisualX =
-    if state.searchBuffer.len > 0 and state.searchCursor > 0:
-      2 + visibleWidth(state.searchBuffer[0 ..< state.searchCursor])
-    else:
-      2
+  let cursorVisualX = 2 + visibleWidth(state.searchBuffer[0 ..< state.searchCursor])
 
-  let leftSideClean = "> " & state.searchBuffer
-  let rightSide = fmt"{statusPrefix}{modeStr} {pkgCountStr}"
-  let spacing = max(0, termW - visibleWidth(leftSideClean) - visibleWidth(rightSide))
+  let leftSideLen = 2 + state.searchBuffer.len
+  let rightSideLen = statusPrefixLen + modeStrLen + 1 + pkgCountStrLen
+  let spacing = max(0, termW - leftSideLen - rightSideLen)
 
-  buffer.add(leftSide)
-  buffer.add(repeat(" ", spacing))
-  buffer.add(rightSide)
+  # Start building the status bar
+  buffer.add(ColorPrompt)
+  buffer.add(">")
+  buffer.add(AnsiReset)
+  buffer.add(" ")
+  buffer.add(state.searchBuffer)
+
+  buffer.appendSpaces(spacing)
+
+  buffer.add(statusPrefix)
+  buffer.add(modeStr)
+  buffer.add(statusMsgStr)
+  buffer.add(" ")
+
+  # Pkg Count
+  buffer.add(AnsiDim)
+  buffer.add("(")
+  if state.soa.hot.locators.len == 0:
+    buffer.add("...")
+  else:
+    buffer.add($state.visibleIndices.len)
+    buffer.add("/")
+    buffer.add($state.soa.hot.locators.len)
+  buffer.add(")")
+  buffer.add(AnsiReset)
+
   return cursorVisualX

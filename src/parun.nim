@@ -5,7 +5,7 @@ import ui/[tui, keyboard, terminal as term]
 import core/[types, state, engine]
 import pkgs/manager
 
-const ParunVersion* = "0.5.0"
+const ParunVersion* = "0.5.1"
 
 proc main() =
   var
@@ -58,6 +58,10 @@ proc main() =
 
   # Main Loop
   while not appState.shouldQuit:
+    let termH = terminalHeight()
+    let termW = terminalWidth()
+    let listH = max(1, termH - 2)
+
     # Install/Uninstall Management
     if appState.shouldInstall or appState.shouldUninstall:
       var targets: seq[string] = @[]
@@ -115,7 +119,7 @@ proc main() =
 
     # Rendering
     if appState.needsRedraw:
-      let res = renderUi(appState, renderBuffer, terminalHeight(), terminalWidth())
+      let res = renderUi(appState, renderBuffer, termH, termW)
       stdout.write("\e[?25l")
       setCursorPos(0, 0)
       stdout.write(renderBuffer)
@@ -126,14 +130,27 @@ proc main() =
       stdout.flushFile()
       appState.needsRedraw = false
 
-      # Lazy details loading
+      # Lazy details loading with speculative pre-fetching (Zero Latency)
       if appState.showDetails and appState.visibleIndices.len > 0:
-        let idx = appState.visibleIndices[appState.cursor]
+        let currentCursor = appState.cursor
+        # Priority: Current element
+        let idx = appState.visibleIndices[currentCursor]
         if not appState.detailsCache.hasKey(idx):
           let i = int(idx)
           requestDetails(
             idx, appState.getName(i), appState.getRepo(i), appState.dataSource
           )
+
+        # Speculative: Prefetch 3 ahead and 2 behind
+        for offset in [1, 2, 3, -1, -2]:
+          let preIdx = currentCursor + offset
+          if preIdx >= 0 and preIdx < appState.visibleIndices.len:
+            let pIdx = appState.visibleIndices[preIdx]
+            if not appState.detailsCache.hasKey(pIdx):
+              let i = int(pIdx)
+              requestDetails(
+                pIdx, appState.getName(i), appState.getRepo(i), appState.dataSource
+              )
 
     # Event Waiting (Input or Resize)
     let ready = selector.select(20)
@@ -145,7 +162,6 @@ proc main() =
       elif key.fd == STDIN_FILENO:
         let k = getKeyAsync()
         if k != '\0':
-          let listH = max(1, terminalHeight() - 2)
           appState = update(appState, Msg(kind: MsgInput, key: k), listH)
 
           if appState.shouldQuit:
@@ -153,7 +169,6 @@ proc main() =
 
     # Worker message processing
     for msg in pollWorkerMessages():
-      let listH = max(1, terminalHeight() - 2)
       appState = update(appState, msg, listH)
 
       if appState.shouldQuit:
