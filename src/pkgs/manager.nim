@@ -3,12 +3,11 @@
 
 import
   std/[
-    os, osproc, strutils, strformat, tables, streams, sets, parsejson, monotimes,
-    httpclient, net, parseutils, times,
+    os, osproc, strutils, strformat, tables, streams, sets, json, monotimes, httpclient,
+    net, parseutils, times,
   ]
-import ../utils/[nimble, pacman]
 import ../core/types
-import batcher
+import cache
 
 type
   WorkerReqKind = enum
@@ -25,6 +24,8 @@ type
     pkgIdx: int32
     searchId: int
     source: DataSource
+    targetMode: SearchMode
+    targetSource: DataSource
 
   NimbleMeta = tuple[url: string, tags: seq[string]]
 
@@ -41,6 +42,15 @@ type
     searchCmd*: string
     sudo*: bool
     supportsAur*: bool
+
+  ## Temporary accumulator for SoA data (Previously batcher.nim)
+  BatchBuilder* = object
+    soa*: PackageSOA
+    textChunk*: string
+    repos*: seq[string]
+    repoMap*: Table[string, uint8]
+    source: DataSource
+    mode: SearchMode
 
 func createPacmanToolDef(binName: string, withSudo: bool): ToolDef =
   ToolDef(
@@ -69,87 +79,229 @@ const Tools*: array[PkgManagerType, ToolDef] = [
   ManNimble: createNimbleToolDef(),
 ]
 
-const
-  AurMetaUrl* = "https://aur.archlinux.org/packages-meta-v1.json.gz"
-  NimbleMetaUrl* =
-    "https://raw.githubusercontent.com/nim-lang/packages/refs/heads/master/packages.json"
-  CacheMaxAgeHours* = 24
-
-## Definition of a cacheable JSON data source.
-type CachedJsonSource* = object
-  localFallbackPath*: string
-  cachePath*: string
-  url*: string
-  maxAgeHours*: int
-  isCompressed*: bool
-
 var
   reqChan: Channel[WorkerReq]
   resChan: Channel[Msg]
   workerThread: Thread[PkgManagerType]
   activeTool*: PkgManagerType
 
-proc downloadJsonToCache*(url, cachePath: string): bool =
-  ## Downloads a JSON file using native httpclient.
-  var client = newHttpClient(timeout = 30_000)
-  try:
-    client.downloadFile(url, cachePath)
-    client.close()
-    return true
-  except Exception:
-    client.close()
-    return false
+func initBatchBuilder*(source: DataSource, mode: SearchMode): BatchBuilder =
+  result.source = source
+  result.mode = mode
+  result.soa.hot.locators = newSeqOfCap[uint32](1000)
+  result.soa.hot.nameLens = newSeqOfCap[uint8](1000)
+  result.soa.cold.verLens = newSeqOfCap[uint8](1000)
+  result.soa.cold.repoIndices = newSeqOfCap[uint8](1000)
+  result.soa.cold.flags = newSeqOfCap[uint8](1000)
 
-proc getFreshJsonPath*(
-    source: CachedJsonSource
-): tuple[path: string, wasDownloaded: bool] =
-  ## Gets path to a valid JSON, downloading if necessary or if cache expired.
-  let cacheDir = getHomeDir() / ".cache/parun"
-  createDir(cacheDir)
+  result.textChunk = newStringOfCap(BatchSize)
+  result.repos = @[]
+  result.repoMap = initTable[string, uint8]()
 
-  let actualCachePath = cacheDir / source.cachePath
+proc flushBatch*(
+    bb: var BatchBuilder,
+    resChan: var Channel[Msg],
+    searchId: int,
+    startTime: MonoTime,
+    force: bool = false,
+) =
+  if bb.soa.hot.locators.len > 0 or force:
+    let dur = (getMonoTime() - startTime).inMilliseconds.int
+    resChan.send(
+      Msg(
+        kind: MsgSearchResults,
+        soa: bb.soa,
+        textChunk: bb.textChunk,
+        repos: bb.repos,
+        searchId: searchId,
+        isAppend: true,
+        durationMs: dur,
+        reqSource: bb.source,
+        reqMode: bb.mode,
+      )
+    )
 
-  var bestPath = ""
-  var ageHours = high(int)
+    # Efficient reset
+    bb.soa.hot.locators.setLen(0)
+    bb.soa.hot.nameLens.setLen(0)
+    bb.soa.cold.verLens.setLen(0)
+    bb.soa.cold.repoIndices.setLen(0)
+    bb.soa.cold.flags.setLen(0)
 
-  if fileExists(actualCachePath):
-    let info = getFileInfo(actualCachePath)
-    ageHours = (getTime() - info.lastWriteTime).inHours
-    if ageHours < source.maxAgeHours:
-      bestPath = actualCachePath
+    bb.textChunk.setLen(0)
+    bb.repos.setLen(0)
+    bb.repoMap.clear()
 
-  if bestPath.len == 0 and source.localFallbackPath.len > 0:
-    if fileExists(source.localFallbackPath):
-      let info = getFileInfo(source.localFallbackPath)
-      let localAge = (getTime() - info.lastWriteTime).inHours
-      if localAge < source.maxAgeHours:
-        bestPath = source.localFallbackPath
-        ageHours = localAge
+func addPackage*(
+    bb: var BatchBuilder, name, ver: openArray[char], repo: string, installed: bool
+) =
+  if bb.textChunk.len + name.len + ver.len > BatchSize:
+    return
 
-  var wasDownloaded = false
-  if bestPath.len == 0 or ageHours >= source.maxAgeHours:
-    if downloadJsonToCache(source.url, actualCachePath):
-      bestPath = actualCachePath
-      wasDownloaded = true
-    elif source.localFallbackPath.len > 0 and fileExists(source.localFallbackPath):
-      bestPath = source.localFallbackPath
-
-  return (bestPath, wasDownloaded)
-
-proc skipJsonBlock*(p: var JsonParser) =
-  ## Skips a full JSON block (object or array) efficiently.
-  var depth = 1
-  while depth > 0:
-    p.next()
-    case p.kind
-    of jsonObjectStart, jsonArrayStart:
-      inc depth
-    of jsonObjectEnd, jsonArrayEnd:
-      dec depth
-    of jsonError, jsonEof:
-      break
+  var rIdx: uint8 = 0
+  if bb.repoMap.hasKey(repo):
+    rIdx = bb.repoMap[repo]
+  else:
+    if bb.repos.len < 255:
+      rIdx = uint8(bb.repos.len)
+      bb.repos.add(repo)
+      bb.repoMap[repo] = rIdx
     else:
-      discard
+      rIdx = 0 # Fallback
+
+  let offset = uint32(bb.textChunk.len)
+  for c in name:
+    bb.textChunk.add(c)
+  for c in ver:
+    bb.textChunk.add(c)
+
+  bb.soa.hot.locators.add(offset)
+  bb.soa.hot.nameLens.add(uint8(name.len))
+  bb.soa.cold.verLens.add(uint8(ver.len))
+  bb.soa.cold.repoIndices.add(rIdx)
+  bb.soa.cold.flags.add(if installed: 1'u8 else: 0'u8)
+
+func parseInstalledPackages*(output: string): Table[string, string] =
+  # Inlined from utils/pacman.nim
+  result = initTable[string, string]()
+  for line in output.splitLines:
+    let parts = line.split(' ')
+    if parts.len > 1:
+      result[parts[0]] = parts[1]
+
+func isPackageInstalled*(line: string): bool =
+  # Inlined from utils/pacman.nim
+  return line.contains("[installed]") or line.contains("[instalado]")
+
+func getRawBaseUrl*(repoUrl: string): string {.noSideEffect.} =
+  # Inlined from utils/nimble.nim
+  var cleanUrl = repoUrl.strip()
+  if cleanUrl.endsWith(" (git)"):
+    cleanUrl = cleanUrl[0 .. ^7]
+  elif cleanUrl.endsWith(" (hg)"):
+    cleanUrl = cleanUrl[0 .. ^6]
+
+  if cleanUrl.endsWith(".git"):
+    cleanUrl = cleanUrl[0 .. ^5]
+  if cleanUrl.endsWith("/"):
+    cleanUrl = cleanUrl[0 .. ^2]
+
+  if "github.com" in cleanUrl:
+    return cleanUrl.replace("github.com", "raw.githubusercontent.com")
+  elif "codeberg.org" in cleanUrl:
+    return cleanUrl & "/raw/branch"
+  elif "gitlab.com" in cleanUrl:
+    return cleanUrl & "/-/raw"
+  elif "sr.ht" in cleanUrl:
+    return cleanUrl & "/blob"
+  return ""
+
+func parseNimbleInfo*(
+    raw, name, url: string, tags: seq[string]
+): string {.noSideEffect.} =
+  # Inlined from utils/nimble.nim
+  var info = initTable[string, string]()
+  var requires: seq[string] = @[]
+
+  for line in raw.splitLines():
+    let l = line.strip()
+    if l.len == 0 or l.startsWith("#"):
+      continue
+
+    let lowerL = l.toLowerAscii()
+    if lowerL.startsWith("requires"):
+      var rest =
+        if lowerL.startsWith("requires:"):
+          l[9 ..^ 1].strip()
+        else:
+          l[8 ..^ 1].strip()
+      if rest.startsWith("(") and rest.endsWith(")"):
+        rest = rest[1 ..^ 2]
+      for part in rest.split(','):
+        let dep = part.strip().strip(chars = {'"'})
+        if dep.len > 0:
+          requires.add(dep)
+    elif '=' in l:
+      let parts = l.split('=', 1)
+      let key = parts[0].strip().toLowerAscii()
+      let val = parts[1].strip().strip(chars = {'"'})
+      case key
+      of "version":
+        info["Version"] = val
+      of "author":
+        info["Author"] = val
+      of "description":
+        info["Description"] = val
+      of "license":
+        info["License"] = val
+      else:
+        discard
+
+  # Normalize to pacman-style format with consistent field names and padding
+  result = newStringOfCap(raw.len + 200)
+  result.add("Name            : " & name & "\n")
+  if info.hasKey("Version"):
+    result.add("Version         : " & info["Version"] & "\n")
+  if info.hasKey("Description"):
+    result.add("Description     : " & info["Description"] & "\n")
+  if info.hasKey("Author"):
+    result.add("Author          : " & info["Author"] & "\n")
+  if info.hasKey("License"):
+    result.add("License         : " & info["License"] & "\n")
+  if url.len > 0:
+    result.add("URL             : " & url & "\n")
+  if tags.len > 0:
+    result.add("Tags            : " & tags.join(", ") & "\n")
+  if requires.len > 0:
+    result.add("Depends On      : " & requires.join(", ") & "\n")
+
+func formatFallbackInfo*(raw: string): string {.noSideEffect.} =
+  # Inlined from utils/nimble.nim
+  var info = initTable[string, string]()
+  for line in raw.splitLines():
+    if line.strip().len == 0:
+      continue
+    if not line.startsWith(" ") and line.endsWith(":"):
+      info["Name"] = line[0 ..^ 2]
+    else:
+      let l = line.strip()
+      if ':' in l:
+        let parts = l.split(':', 1)
+        let key = parts[0].strip().toLowerAscii()
+        let val = parts[1].strip()
+        case key
+        of "url":
+          info["URL"] = val
+        of "tags":
+          info["Tags"] = val
+        of "description":
+          info["Description"] = val
+        of "license":
+          info["License"] = val
+        of "version":
+          info["Version"] = val
+        of "author":
+          info["Author"] = val
+        else:
+          discard
+
+  result = newStringOfCap(raw.len + 100)
+  # Only add fields that have values - normalize to pacman format
+  if info.hasKey("Name"):
+    result.add("Name            : " & info["Name"] & "\n")
+  if info.hasKey("Version"):
+    result.add("Version         : " & info["Version"] & "\n")
+  if info.hasKey("Description"):
+    result.add("Description     : " & info["Description"] & "\n")
+  if info.hasKey("Author"):
+    result.add("Author          : " & info["Author"] & "\n")
+  if info.hasKey("License"):
+    result.add("License         : " & info["License"] & "\n")
+  if info.hasKey("URL"):
+    result.add("URL             : " & info["URL"] & "\n")
+  if info.hasKey("Tags"):
+    result.add("Tags            : " & info["Tags"] & "\n")
+  result.add("\n(Info from local nimble search cache)")
 
 proc workerLoop(toolType: PkgManagerType) {.thread.} =
   ## Main loop of the worker thread.
@@ -158,6 +310,9 @@ proc workerLoop(toolType: PkgManagerType) {.thread.} =
   var nimbleMetaCache = initTable[string, NimbleMeta]()
   var client = newHttpClient(timeout = 3000)
   let toolDef = Tools[toolType]
+
+  var globalInstMap = initTable[string, string]()
+  var instMapLoaded = false
 
   while true:
     if not hasReq:
@@ -172,10 +327,11 @@ proc workerLoop(toolType: PkgManagerType) {.thread.} =
         client.close()
         break
       of ReqLoadAll:
-        # Load system packages (pacman -Sl)
         let tStart = getMonoTime()
+        # Refresh installed cache only on explicit reload all
         let (instOut, _) = execCmdEx("pacman -Q")
-        let instMap = parseInstalledPackages(instOut)
+        globalInstMap = parseInstalledPackages(instOut)
+        instMapLoaded = true
 
         var p = startProcess(
           "pacman",
@@ -184,7 +340,7 @@ proc workerLoop(toolType: PkgManagerType) {.thread.} =
         )
         var outp = p.outputStream
         var line = ""
-        var bb = initBatchBuilder()
+        var bb = initBatchBuilder(SourceSystem, ModeLocal)
         var counter = 0
         var interrupted = false
         var lastRepo = ""
@@ -228,20 +384,11 @@ proc workerLoop(toolType: PkgManagerType) {.thread.} =
           if bb.textChunk.len + nameLen + verLen > BatchSize or counter >= 1000:
             flushBatch(bb, resChan, req.searchId, tStart)
             counter = 0
-            let (hasNew, newReq) = reqChan.tryRecv()
-            if hasNew and newReq.kind != ReqDetails:
-              currentReq = newReq
-              hasReq = true
-              interrupted = true
-              break
 
-          # Check installed (lazy string alloc)
           var installed = isPackageInstalled(line)
           if not installed:
-            # Only alloc name string if strict check against pacman -Q is needed
-            # (and if not found by [installed] tag)
             let nameStr = line[nameStart ..< nameStart + nameLen]
-            if instMap.hasKey(nameStr):
+            if globalInstMap.hasKey(nameStr):
               installed = true
 
           bb.addPackage(
@@ -255,7 +402,6 @@ proc workerLoop(toolType: PkgManagerType) {.thread.} =
         if not interrupted:
           flushBatch(bb, resChan, req.searchId, tStart)
       of ReqLoadNimble:
-        # Load Nimble packages from JSON
         let tStart = getMonoTime()
         var installedSet = initHashSet[string]()
         let (listOut, _) = execCmdEx("nimble list -i --noColor")
@@ -264,177 +410,82 @@ proc workerLoop(toolType: PkgManagerType) {.thread.} =
           if parts.len > 0:
             installedSet.incl(parts[0])
 
-        let nimbleSource = CachedJsonSource(
-          localFallbackPath: "",
-          cachePath: "nimble-packages.json",
-          url: NimbleMetaUrl,
-          maxAgeHours: CacheMaxAgeHours,
-          isCompressed: false,
-        )
-
-        let (pkgFile, _) = getFreshJsonPath(nimbleSource)
-        if pkgFile.len == 0:
-          resChan.send(
-            Msg(
-              kind: MsgError,
-              errMsg:
-                "No Nimble packages available (download failed and no local cache)",
-            )
-          )
+        var nimbleCache = initNimbleCache()
+        # Ensure we keep the JSON for metadata extraction
+        if not loadOrRefreshCache(nimbleCache, keepJson = true):
+          resChan.send(Msg(kind: MsgError, errMsg: "Failed to load Nimble metadata"))
           continue
 
-        var fs = newFileStream(pkgFile, fmRead)
-        var parser: JsonParser
-        open(parser, fs, pkgFile)
-        defer:
-          close(parser)
-        var bb = initBatchBuilder()
+        let jsonPath = getCachePath() / nimbleCache.jsonPath
+
+        # If cache was fresh but JSON was missing (from previous run), fetch it
+        if not fileExists(jsonPath):
+          discard ensureJsonAvailable(nimbleCache)
+
+        if fileExists(jsonPath):
+          nimbleMetaCache = getStreamedNimbleMeta(jsonPath)
+
+        let binPath = getCachePath() / nimbleCache.binPath
+        var bb = initBatchBuilder(SourceNimble, ModeLocal)
         var counter = 0
         var interrupted = false
-        nimbleMetaCache.clear()
-        parser.next()
+        var nameBuf = newStringOfCap(256)
 
-        while parser.kind != jsonEof and parser.kind != jsonError:
-          if parser.kind == jsonObjectStart:
-            var name, version, url = ""
-            var tags: seq[string] = @[]
-            parser.next()
-            while parser.kind != jsonObjectEnd and parser.kind != jsonEof:
-              if parser.kind == jsonString:
-                let key = parser.str
-                parser.next()
-                if key == "name" and parser.kind == jsonString:
-                  name = parser.str
-                  parser.next()
-                elif key == "version" and parser.kind == jsonString:
-                  version = parser.str
-                  parser.next()
-                elif key == "url" and parser.kind == jsonString:
-                  url = parser.str
-                  parser.next()
-                elif key == "tags" and parser.kind == jsonArrayStart:
-                  parser.next()
-                  while parser.kind != jsonArrayEnd:
-                    if parser.kind == jsonString:
-                      tags.add(parser.str)
-                    parser.next()
-                  parser.next()
-                else:
-                  if parser.kind in {jsonObjectStart, jsonArrayStart}:
-                    skipJsonBlock(parser)
-                    parser.next()
-                  else:
-                    parser.next()
-              else:
-                parser.next()
+        withBinaryCache(binPath, name, version):
+          if bb.textChunk.len + name.len + version.len > BatchSize or counter >= 2000:
+            flushBatch(bb, resChan, req.searchId, tStart)
+            counter = 0
 
-            if name.len > 0:
-              let ver = if version.len > 0: version else: "latest"
-              if url.len > 0:
-                nimbleMetaCache[name] = (url: url, tags: tags)
-              if bb.textChunk.len + name.len + ver.len > BatchSize or counter >= 500:
-                flushBatch(bb, resChan, req.searchId, tStart)
-                counter = 0
-                let (hasNew, newReq) = reqChan.tryRecv()
-                if hasNew and newReq.kind != ReqDetails:
-                  currentReq = newReq
-                  hasReq = true
-                  interrupted = true
-                  break
-              bb.addPackage(name, ver, "nimble", name in installedSet)
-              counter.inc()
-            parser.next()
-          else:
-            parser.next()
-        fs.close()
+          if not interrupted:
+            nameBuf.setLen(name.len)
+            for i in 0 ..< name.len:
+              nameBuf[i] = name[i]
+            bb.addPackage(name, version, "nimble", nameBuf in installedSet)
+            counter.inc()
+
         if not interrupted:
           flushBatch(bb, resChan, req.searchId, tStart)
       of ReqLoadAur:
-        # Load AUR packages from compressed JSON
         let tStart = getMonoTime()
-        let aurSource = CachedJsonSource(
-          localFallbackPath: "",
-          cachePath: "aur-packages-meta-v1.json.gz",
-          url: AurMetaUrl,
-          maxAgeHours: CacheMaxAgeHours,
-          isCompressed: true,
-        )
-
-        let (metaPath, _) = getFreshJsonPath(aurSource)
-        if metaPath.len == 0:
-          resChan.send(Msg(kind: MsgError, errMsg: "Failed to download AUR metadata"))
+        var aurCache = initAurCache()
+        if not loadOrRefreshCache(aurCache):
+          resChan.send(Msg(kind: MsgError, errMsg: "Failed to load AUR metadata"))
           continue
 
-        let (instOut, _) = execCmdEx("pacman -Q")
-        let instMap = parseInstalledPackages(instOut)
+        if not instMapLoaded:
+          let (instOut, _) = execCmdEx("pacman -Q")
+          globalInstMap = parseInstalledPackages(instOut)
+          instMapLoaded = true
 
-        var p = startProcess(
-          "sh",
-          args = ["-c", "gunzip -c " & metaPath],
-          options = {poUsePath, poStdErrToStdOut},
-        )
-        var outp = p.outputStream
-
-        var parser: JsonParser
-        open(parser, outp, "aur_meta")
-        defer:
-          close(parser)
-
-        var bb = initBatchBuilder()
+        let binPath = getCachePath() / aurCache.binPath
+        var bb = initBatchBuilder(SourceSystem, ModeAUR)
         var counter = 0
         var interrupted = false
+        var nameBuf = newStringOfCap(256)
 
-        parser.next()
-        while parser.kind != jsonEof and parser.kind != jsonError:
-          if parser.kind == jsonObjectStart:
-            var name, ver: string
-            parser.next()
-            while parser.kind != jsonObjectEnd and parser.kind != jsonEof:
-              if parser.kind == jsonString:
-                let key = parser.str
-                parser.next()
-                if key == "Name" and parser.kind == jsonString:
-                  name = parser.str
-                  parser.next()
-                elif key == "Version" and parser.kind == jsonString:
-                  ver = parser.str
-                  parser.next()
-                else:
-                  if parser.kind in {jsonObjectStart, jsonArrayStart}:
-                    skipJsonBlock(parser)
-                    parser.next()
-                  else:
-                    parser.next()
-              else:
-                parser.next()
+        withBinaryCache(binPath, name, version):
+          if bb.textChunk.len + name.len + version.len > BatchSize or counter >= 5000:
+            flushBatch(bb, resChan, req.searchId, tStart)
+            counter = 0
 
-            if name.len > 0:
-              if bb.textChunk.len + name.len + ver.len > BatchSize or counter >= 2000:
-                flushBatch(bb, resChan, req.searchId, tStart)
-                counter = 0
-                let (hasNew, newReq) = reqChan.tryRecv()
-                if hasNew and newReq.kind != ReqDetails:
-                  currentReq = newReq
-                  hasReq = true
-                  interrupted = true
-                  break
-              bb.addPackage(name, ver, "aur", instMap.hasKey(name))
-              counter.inc()
-            parser.next()
-          else:
-            parser.next()
+          if not interrupted:
+            nameBuf.setLen(name.len)
+            for i in 0 ..< name.len:
+              nameBuf[i] = name[i]
+            bb.addPackage(name, version, "aur", globalInstMap.hasKey(nameBuf))
+            counter.inc()
 
-        p.close()
         if not interrupted:
           flushBatch(bb, resChan, req.searchId, tStart)
       of ReqSearch:
-        # Direct search (fallback for pacman -Ss)
         let tStart = getMonoTime()
-        let (instOut, _) = execCmdEx("pacman -Q")
-        let instMap = parseInstalledPackages(instOut)
+        if not instMapLoaded:
+          let (instOut, _) = execCmdEx("pacman -Q")
+          globalInstMap = parseInstalledPackages(instOut)
+          instMapLoaded = true
 
         let (outp, _) = execCmdEx(toolDef.bin & toolDef.searchCmd & req.query)
-        var bb = initBatchBuilder()
+        var bb = initBatchBuilder(SourceSystem, ModeLocal)
         for line in outp.splitLines:
           if line.len == 0:
             continue
@@ -452,10 +503,9 @@ proc workerLoop(toolType: PkgManagerType) {.thread.} =
           if bb.textChunk.len + name.len + ver.len > BatchSize:
             flushBatch(bb, resChan, req.searchId, tStart)
 
-          bb.addPackage(name, ver, repo, instMap.hasKey(name))
+          bb.addPackage(name, ver, repo, globalInstMap.hasKey(name))
         flushBatch(bb, resChan, req.searchId, tStart)
       of ReqDetails:
-        # Load details (pacman -Si / nimble search)
         if req.source == SourceNimble:
           var content = ""
           var fetched = false
@@ -503,7 +553,6 @@ proc workerLoop(toolType: PkgManagerType) {.thread.} =
               req.pkgName
             else:
               fmt"{req.pkgRepo}/{req.pkgName}"
-
           let bin = if req.pkgRepo == "local": "pacman" else: toolDef.bin
           let args =
             if req.pkgRepo == "local":
@@ -532,7 +581,6 @@ proc initPackageManager*() =
 proc shutdownPackageManager*() =
   ## Stops the worker thread and closes channels.
   reqChan.send(WorkerReq(kind: ReqStop))
-
   reqChan.close()
   resChan.close()
 
@@ -575,11 +623,9 @@ proc runTransaction*(tool: PkgManagerType, targets: seq[string], install: bool):
   return execCmd(cmd)
 
 proc installPackages*(names: seq[string], source: DataSource): int =
-  ## Executes the install command in the main terminal.
   let tool = if source == SourceNimble: ManNimble else: activeTool
   return runTransaction(tool, names, true)
 
 proc uninstallPackages*(names: seq[string], source: DataSource): int =
-  ## Executes the uninstall command in the main terminal.
   let tool = if source == SourceNimble: ManNimble else: activeTool
   return runTransaction(tool, names, false)

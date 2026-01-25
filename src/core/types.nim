@@ -175,6 +175,9 @@ type
       isAppend*: bool
       ## Performance telemetry.
       durationMs*: int
+      ## Request Origin/Target
+      reqSource*: DataSource
+      reqMode*: SearchMode
     of MsgDetailsLoaded:
       ## Requested package index.
       pkgIdx*: int32

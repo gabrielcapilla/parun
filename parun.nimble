@@ -1,6 +1,6 @@
 # Package
 
-version = "0.4.0"
+version = "0.5.0"
 author = "Gabriel Capilla"
 description = "Terminal UI for pacman, AUR & nimble"
 license = "MIT"
@@ -10,7 +10,6 @@ bin = @["parun"]
 # Dependencies
 
 requires "nim >= 2.2.6"
-requires "nimsimd >= 1.3.2"
 
 # Tasks
 

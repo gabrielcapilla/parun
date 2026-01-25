@@ -50,8 +50,9 @@ parun --noinfo     # Hide details panel
 
 Type prefixes to switch between package sources:
 
-- **aur/** · Search AUR packages
-- **nim/** · Search Nimble packages
+- **aur/** · Search AUR packages (alias: `a/`)
+- **nim/** · Search Nimble packages (alias: `n/`, `nimble/`)
+- **installed/** · Show only installed packages (alias: `i/`)
 
 ---
 

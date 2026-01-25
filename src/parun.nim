@@ -5,7 +5,7 @@ import ui/[tui, keyboard, terminal as term]
 import core/[types, state, engine]
 import pkgs/manager
 
-const ParunVersion* = "0.4.0"
+const ParunVersion* = "0.5.0"
 
 proc main() =
   var
@@ -39,12 +39,10 @@ proc main() =
   var appState = newState(startMode, startShowDetails, startNimble)
 
   # Initial data load
-  if startNimble:
-    requestLoadNimble(appState.searchId)
-  else:
-    requestLoadAll(appState.searchId)
-    if startMode == ModeAUR:
-      requestLoadAur(appState.searchId)
+  # Preload everything to ensure instant switching (Zero Latency)
+  requestLoadAll(appState.searchId)
+  requestLoadAur(appState.searchId)
+  requestLoadNimble(appState.searchId)
 
   # Async I/O Setup
   let selector = newSelector[int]()

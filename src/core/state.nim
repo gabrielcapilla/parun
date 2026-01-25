@@ -40,7 +40,7 @@ proc appendVersion*(state: AppState, idx: int, buffer: var string, maxLen: int =
 proc appendRepo*(state: AppState, idx: int, buffer: var string, maxLen: int = -1) =
   ## Retrieves the repository name of package `idx`.
   let rIdx = state.soa.cold.repoIndices[idx]
-  let rOffset = int(state.repoOffsets[idx])
+  let rOffset = int(state.repoOffsets[rIdx])
   let rLen = int(state.repoLens[int(rIdx)])
   var copyLen = rLen
   if maxLen >= 0 and maxLen < rLen:
@@ -72,7 +72,8 @@ func getVersion*(state: AppState, idx: int): string =
 
 func getRepo*(state: AppState, idx: int): string =
   ## Creates a new string with the repository (Warning: Allocates GC memory).
-  let repoOffset = int(state.repoOffsets[idx])
+  let rIdx = int(state.soa.cold.repoIndices[idx])
+  let repoOffset = int(state.repoOffsets[rIdx])
   let repoLen = int(state.repoLens[int(state.soa.cold.repoIndices[idx])])
   if repoOffset + repoLen <= state.repoArena.len:
     result = newStringOfCap(repoLen)
@@ -85,14 +86,31 @@ func getPkgId*(state: AppState, idx: int32): string {.noSideEffect.} =
   ## Returns unique identifier "repo/name".
   state.getRepo(int(idx)) & "/" & state.getName(int(idx))
 
+func isInstalled*(state: AppState, idx: int): bool {.inline, noSideEffect.} =
+  ## Checks if a package is installed using bitwise operations.
+  (state.soa.cold.flags[idx] and 1) != 0
+
 func getEffectiveQuery*(buffer: string): string {.noSideEffect.} =
-  ## Extracts the real query by removing magic prefixes (aur/, nimble/).
+  ## Extracts the real query by removing magic prefixes and their aliases.
+  ##
+  ## Supported prefixes:
+  ## - `aur/` or `a/` → AUR packages
+  ## - `nimble/` or `nim/` or `n/` → Nimble packages
+  ## - `installed/` or `i/` → Only installed packages
   if buffer.startsWith("aur/"):
     return buffer[4 ..^ 1]
+  if buffer.startsWith("a/"):
+    return buffer[2 ..^ 1]
   if buffer.startsWith("nimble/"):
     return buffer[7 ..^ 1]
   if buffer.startsWith("nim/"):
     return buffer[4 ..^ 1]
+  if buffer.startsWith("n/"):
+    return buffer[2 ..^ 1]
+  if buffer.startsWith("installed/"):
+    return buffer[10 ..^ 1]
+  if buffer.startsWith("i/"):
+    return buffer[2 ..^ 1]
   return buffer
 
 proc filterIndices*(state: AppState, query: string, results: var seq[int32]) =
@@ -113,10 +131,23 @@ proc filterIndices*(state: AppState, query: string, results: var seq[int32]) =
 
   let totalPkgs = state.soa.hot.locators.len
 
+  # Check if we should filter by installed packages
+  let filterInstalled = query.startsWith("installed/") or query.startsWith("i/")
+
   if cleanQuery.len == 0:
     results.setLen(totalPkgs)
     for i in 0 ..< totalPkgs:
       results[i] = int32(i)
+
+    # Filter by installed if prefix is set
+    if filterInstalled:
+      var installedOnly: seq[int32] = @[]
+      for idx in results:
+        if isInstalled(state, int(idx)):
+          installedOnly.add(idx)
+      results.setLen(installedOnly.len)
+      for i, idx in installedOnly:
+        results[i] = idx
     return
 
   let ctx = prepareSearchContext(cleanQuery)
@@ -133,6 +164,10 @@ proc filterIndices*(state: AppState, query: string, results: var seq[int32]) =
   for i in 0 ..< totalPkgs:
     if buf.count >= 2000:
       break
+
+    # Skip non-installed packages when installed/ prefix is used
+    if filterInstalled and not isInstalled(state, i):
+      continue
 
     let offset = int(state.soa.hot.locators[i])
     let namePtr = cast[ptr char](arenaBase + offset)
@@ -241,6 +276,7 @@ proc loadFromDB*(state: var AppState, source: DataSource) =
 proc switchToNimble*(state: var AppState) =
   if state.dataSource != SourceNimble:
     state.visibleIndices.setLen(0)
+    state.detailsCache.clear()
     saveCurrentToDB(state)
     state.dataSource = SourceNimble
     state.searchId.inc()
@@ -255,6 +291,7 @@ proc switchToNimble*(state: var AppState) =
 proc switchToSystem*(state: var AppState, mode: SearchMode) =
   if state.dataSource != SourceSystem or state.searchMode != mode:
     state.visibleIndices.setLen(0)
+    state.detailsCache.clear()
     saveCurrentToDB(state)
     state.dataSource = SourceSystem
     state.searchMode = mode
@@ -343,6 +380,7 @@ proc newState*(
     dataSource: ds,
     baseSearchMode: initialMode,
     baseDataSource: ds,
+    viewingSelection: false,
     isSearching: false,
     searchId: 1,
     dataSearchId: 0,
@@ -354,9 +392,6 @@ proc newState*(
     detailScroll: 0,
     stringArena: initStringArena(64 * 1024),
   )
-
-func isInstalled*(state: AppState, idx: int): bool {.inline, noSideEffect.} =
-  (state.soa.cold.flags[idx] and 1) != 0
 
 func toggleSelectionAtCursor*(state: var AppState) =
   if state.visibleIndices.len > 0:

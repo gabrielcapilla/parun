@@ -4,6 +4,43 @@ import std/[tables, strutils, monotimes, times]
 import types, state, input_handler
 import ../pkgs/manager
 
+proc appendBatch(db: var PackageDB, msg: Msg) =
+  ## Helper to append results to a background DB.
+  var repoMap = newSeq[uint8](msg.repos.len)
+
+  for i, r in msg.repos:
+    let rIdx = uint8(db.repos.len)
+    db.repos.add(r)
+    # Add to Repo Arena
+    let offset = uint16(db.repoArena.len)
+    db.repoOffsets.add(offset)
+    db.repoLens.add(uint8(r.len))
+    for c in r:
+      db.repoArena.add(c)
+
+    # Simple mapping for this batch (assuming unique repos in batch are mapped to global DB indices)
+    repoMap[i] = rIdx
+
+  # Append SOA Data
+  let invalidRepo = uint8(0) # Should not happen if logic matches
+  let textBase = uint32(db.textArena.len)
+
+  for i in 0 ..< msg.soa.hot.locators.len:
+    db.soa.hot.locators.add(textBase + msg.soa.hot.locators[i])
+    db.soa.hot.nameLens.add(msg.soa.hot.nameLens[i])
+    db.soa.cold.verLens.add(msg.soa.cold.verLens[i])
+
+    let batchRIdx = msg.soa.cold.repoIndices[i]
+    if batchRIdx < repoMap.len.uint8:
+      db.soa.cold.repoIndices.add(repoMap[batchRIdx])
+    else:
+      db.soa.cold.repoIndices.add(invalidRepo)
+
+    db.soa.cold.flags.add(msg.soa.cold.flags[i])
+
+  # Append Text Chunk
+  db.textArena.add(msg.textChunk)
+
 proc processInput*(state: var AppState, k: char, listHeight: int) =
   if k == KeyCtrlS:
     state.viewingSelection = not state.viewingSelection
@@ -24,8 +61,10 @@ proc processInput*(state: var AppState, k: char, listHeight: int) =
 
   if not state.viewingSelection:
     let isNimbleQuery =
-      state.searchBuffer.startsWith("nimble/") or state.searchBuffer.startsWith("nim/")
-    let isAurQuery = state.searchBuffer.startsWith("aur/")
+      state.searchBuffer.startsWith("nimble/") or state.searchBuffer.startsWith("nim/") or
+      state.searchBuffer.startsWith("n/")
+    let isAurQuery =
+      state.searchBuffer.startsWith("aur/") or state.searchBuffer.startsWith("a/")
 
     if isNimbleQuery:
       switchToNimble(state)
@@ -67,6 +106,24 @@ proc update*(state: AppState, msg: Msg, listHeight: int): AppState =
             if result.searchMode == ModeAUR:
               result.statusMessage = "Type to search AUR..."
   of MsgSearchResults:
+    # Special Handling for Background Loading:
+    # If the message is intended for a source/mode that is NOT active,
+    # we route it directly to the corresponding DB and mark it loaded.
+    let isBackground =
+      (msg.reqSource != state.dataSource) or
+      (msg.reqSource == SourceSystem and msg.reqMode != state.searchMode)
+
+    if isBackground:
+      # Background Update logic
+      if msg.reqSource == SourceNimble:
+        appendBatch(result.nimbleDB, msg)
+        result.nimbleDB.isLoaded = true
+      elif msg.reqSource == SourceSystem and msg.reqMode == ModeAUR:
+        appendBatch(result.aurDB, msg)
+        result.aurDB.isLoaded = true
+      return
+
+    # Foreground Update (Matches current view)
     if msg.searchId != result.searchId:
       return result
     result.statusMessage = ""
@@ -97,6 +154,7 @@ proc update*(state: AppState, msg: Msg, listHeight: int): AppState =
           repoLookup[r] = uint8(result.repos.len)
           repoMap[i] = uint8(result.repos.len)
           repoOffsetMap[i] = uint16(result.repoArena.len)
+          result.repoOffsets.add(uint16(result.repoArena.len))
           result.repos.add(r)
           result.repoLens.add(uint8(r.len))
           for c in r:
@@ -114,7 +172,6 @@ proc update*(state: AppState, msg: Msg, listHeight: int): AppState =
         result.soa.cold.verLens.add(msg.soa.cold.verLens[i])
         result.soa.cold.repoIndices.add(repoMap[msg.soa.cold.repoIndices[i]])
         result.soa.cold.flags.add(msg.soa.cold.flags[i])
-        result.repoOffsets.add(repoOffsetMap[msg.soa.cold.repoIndices[i]])
 
       let requiredWords = (result.soa.hot.locators.len + 63) div 64
       if result.selectionBits.len < requiredWords:
@@ -166,23 +223,13 @@ proc update*(state: AppState, msg: Msg, listHeight: int): AppState =
 
       result.repoArena.setLen(0)
       result.repoLens.setLen(0)
-      result.repoOffsets.setLen(result.soa.hot.locators.len)
+      result.repoOffsets.setLen(0)
 
-      var repoOffsetMap: array[256, uint16]
-      for i in 0 ..< 256:
-        repoOffsetMap[i] = 0xFFFF
-
-      for i in 0 ..< result.soa.hot.locators.len:
-        let repoIdx = int(result.soa.cold.repoIndices[i])
-        if repoIdx < result.repos.len and repoOffsetMap[repoIdx] == 0xFFFF:
-          repoOffsetMap[repoIdx] = uint16(result.repoArena.len)
-          result.repoLens.add(uint8(result.repos[repoIdx].len))
-          for c in result.repos[repoIdx]:
-            result.repoArena.add(c)
-        if repoIdx < 256:
-          result.repoOffsets[i] = repoOffsetMap[repoIdx]
-        else:
-          result.repoOffsets[i] = 0
+      for r in result.repos:
+        result.repoOffsets.add(uint16(result.repoArena.len))
+        result.repoLens.add(uint8(r.len))
+        for c in r:
+          result.repoArena.add(c)
 
       if result.dataSource == SourceSystem and result.searchMode == ModeLocal:
         result.systemDB.soa = result.soa

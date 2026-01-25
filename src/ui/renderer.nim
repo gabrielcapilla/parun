@@ -120,7 +120,7 @@ proc appendRow*(
     buffer.add(Reset)
 
 proc renderDetails*(buffer: var string, state: AppState, r, listH, detailTextW: int) =
-  ## Renders the side details panel.
+  ## Renders the side details panel with dynamic text wrapping.
   if r == 0:
     buffer.add(
       ColorFrame & BoxTopLeft & repeat(BoxHor, detailTextW) & BoxTopRight & Reset
@@ -136,10 +136,23 @@ proc renderDetails*(buffer: var string, state: AppState, r, listH, detailTextW: 
     if state.visibleIndices.len > 0:
       let curIdx = state.visibleIndices[state.cursor]
       if state.detailsCache.hasKey(curIdx):
-        let dLines = state.detailsCache[curIdx].splitLines
+        # Get raw content from cache
+        let rawContent = state.detailsCache[curIdx]
+
+        # Apply dynamic wrapping based on current panel width
+        var flatLines: seq[string] = @[]
+        for line in rawContent.splitLines():
+          if visibleWidth(line) <= detailTextW:
+            flatLines.add(line)
+          else:
+            # Line needs wrapping - wrapText already returns seq[string]
+            let wrapped = wrapText(line, detailTextW)
+            for w in wrapped:
+              flatLines.add(w)
+
         let effectiveIdx = contentRowIndex + state.detailScroll
-        if effectiveIdx < dLines.len:
-          textContent = dLines[effectiveIdx].replace("\t", "  ")
+        if effectiveIdx < flatLines.len:
+          textContent = flatLines[effectiveIdx].replace("\t", "  ")
       elif contentRowIndex == 0:
         textContent = "..."
 
