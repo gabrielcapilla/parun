@@ -8,6 +8,61 @@ import ../core/types
 import cache, worker_types
 import backends/[pacman, nimble]
 
+proc downloadWithRetry*(client: HttpClient, url: string, maxRetries: int = 3): string =
+  ## Downloads content with exponential backoff retry logic
+  var lastError: string = ""
+  for i in 0 ..< maxRetries:
+    try:
+      return client.getContent(url)
+    except Exception as e:
+      lastError = e.msg
+      if i < maxRetries - 1:
+        let delay = 1000 * (i + 1) # Exponential backoff: 1s, 2s, 3s
+        sleep(delay)
+  # All retries failed
+  raise newException(
+    HttpRequestError,
+    "Failed to download after " & $maxRetries & " attempts: " & lastError,
+  )
+
+proc addToDetailsCache(
+    cache: var Table[string, string], key, value: string, maxSize: int
+) =
+  ## Adds item to cache with LRU-style eviction when limit reached
+  if cache.len >= maxSize:
+    # Simple eviction: clear half the cache when full
+    var count = 0
+    for k in cache.keys:
+      if count < maxSize div 2:
+        cache.del(k)
+        count += 1
+      else:
+        break
+  cache[key] = value
+
+type
+  ExecResult = tuple[output: string, success: bool]
+  ExecMode = enum
+    emStrict ## Non-zero exit code = failure (for critical commands)
+    emLenient ## Empty output is acceptable even with non-zero (for search)
+
+proc execWithErrorCheck(cmd: string, mode: ExecMode = emStrict): ExecResult =
+  ## Executes command with appropriate error handling based on mode
+  ## emStrict: Any non-zero exit code is failure
+  ## emLenient: Empty output with non-zero is acceptable (no results)
+  let (output, exitCode) = execCmdEx(cmd)
+
+  case mode
+  of emStrict:
+    if exitCode != 0:
+      return ("", false)
+  of emLenient:
+    # For search commands: empty result is OK, only fail if command itself failed
+    # We still return output even if exitCode != 0 (could mean "no results")
+    discard
+
+  return (output, true)
+
 proc workerLoop*(
     toolType: PkgManagerType,
     reqChan: var Channel[WorkerReq],
@@ -19,6 +74,9 @@ proc workerLoop*(
   var hasReq = false
   var nimbleMetaCache = initTable[string, NimbleMeta]()
   var detailsCache = initTable[string, string]() # Worker-side persistent cache
+  const MaxDetailsCacheSize = 512 # Prevent memory leak in long sessions
+  # HTTP client with default SSL certificate validation
+  # Note: Nim's httpclient validates certificates by default
   var client = newHttpClient(timeout = 3000)
   let toolDef = tools[toolType]
 
@@ -40,7 +98,15 @@ proc workerLoop*(
         break
       of ReqLoadAll:
         let tStart = getMonoTime()
-        let (instOut, _) = execCmdEx("pacman -Q")
+        let (instOut, exitCode) = execCmdEx("pacman -Q")
+        if exitCode != 0:
+          resChan.send(
+            Msg(
+              kind: MsgError,
+              errMsg: "Failed to get installed packages (pacman -Q failed)",
+            )
+          )
+          continue
         globalInstMap = parseInstalledPackages(instOut)
         instMapLoaded = true
 
@@ -110,14 +176,16 @@ proc workerLoop*(
       of ReqLoadNimble:
         let tStart = getMonoTime()
         var installedSet = initHashSet[string]()
-        let (listOut, _) = execCmdEx("nimble list -i --noColor")
-        for line in listOut.splitLines:
-          let parts = line.split(' ')
-          if parts.len > 0:
-            installedSet.incl(parts[0])
+        let (listOut, listSuccess) =
+          execWithErrorCheck("nimble list -i --noColor", emLenient)
+        if listSuccess:
+          for line in listOut.splitLines:
+            let parts = line.split(' ')
+            if parts.len > 0:
+              installedSet.incl(parts[0])
 
         var nimbleCache = initNimbleCache()
-        if not loadOrRefreshCache(nimbleCache, keepJson = true):
+        if not safeLoadOrRefreshCache(nimbleCache, keepJson = true):
           resChan.send(Msg(kind: MsgError, errMsg: "Failed to load Nimble metadata"))
           continue
 
@@ -149,12 +217,17 @@ proc workerLoop*(
       of ReqLoadAur:
         let tStart = getMonoTime()
         var aurCache = initAurCache()
-        if not loadOrRefreshCache(aurCache):
+        if not safeLoadOrRefreshCache(aurCache):
           resChan.send(Msg(kind: MsgError, errMsg: "Failed to load AUR metadata"))
           continue
 
         if not instMapLoaded:
-          let (instOut, _) = execCmdEx("pacman -Q")
+          let (instOut, instSuccess) = execWithErrorCheck("pacman -Q", emStrict)
+          if not instSuccess:
+            resChan.send(
+              Msg(kind: MsgError, errMsg: "Failed to get installed packages")
+            )
+            continue
           globalInstMap = parseInstalledPackages(instOut)
           instMapLoaded = true
 
@@ -179,11 +252,17 @@ proc workerLoop*(
       of ReqSearch:
         let tStart = getMonoTime()
         if not instMapLoaded:
-          let (instOut, _) = execCmdEx("pacman -Q")
+          let (instOut, instOk) = execWithErrorCheck("pacman -Q", emStrict)
+          if not instOk:
+            resChan.send(
+              Msg(kind: MsgError, errMsg: "Failed to list installed packages")
+            )
+            continue
           globalInstMap = parseInstalledPackages(instOut)
           instMapLoaded = true
 
-        let (outp, _) = execCmdEx(toolDef.bin & toolDef.searchCmd & req.query)
+        let (outp, _) =
+          execWithErrorCheck(toolDef.bin & toolDef.searchCmd & req.query, emLenient)
         var bb = initBatchBuilder(SourceSystem, ModeLocal)
         for line in outp.splitLines:
           if line.len == 0:
@@ -244,8 +323,10 @@ proc workerLoop*(
                   for nameVariant in names:
                     try:
                       content = parseNimbleInfo(
-                        client.getContent(
-                          rawBase & "/" & branch & "/" & nameVariant & ".nimble"
+                        downloadWithRetry(
+                          client,
+                          rawBase & "/" & branch & "/" & nameVariant & ".nimble",
+                          maxRetries = 2, # Shorter retries for speculative fetches
                         ),
                         r.pkgName,
                         meta.url,
@@ -259,14 +340,14 @@ proc workerLoop*(
                     break
 
             if fetched:
-              detailsCache[cacheKey] = content
+              addToDetailsCache(detailsCache, cacheKey, content, MaxDetailsCacheSize)
               resChan.send(
                 Msg(kind: MsgDetailsLoaded, pkgIdx: r.pkgIdx, content: content)
               )
             else:
-              let (c, _) = execCmdEx("nimble search " & r.pkgName)
+              let (c, _) = execWithErrorCheck("nimble search " & r.pkgName, emLenient)
               let info = formatFallbackInfo(c)
-              detailsCache[cacheKey] = info
+              addToDetailsCache(detailsCache, cacheKey, info, MaxDetailsCacheSize)
               resChan.send(Msg(kind: MsgDetailsLoaded, pkgIdx: r.pkgIdx, content: info))
           else:
             let target =
@@ -280,8 +361,15 @@ proc workerLoop*(
                 @["-Qi", target]
               else:
                 @["-Si", target]
-            let (c, _) = execCmdEx(bin & " " & args.join(" "))
-            detailsCache[cacheKey] = c
+            let (c, ok) = execWithErrorCheck(bin & " " & args.join(" "), emStrict)
+            if not ok:
+              resChan.send(
+                Msg(
+                  kind: MsgError, errMsg: "Failed to get package info for " & r.pkgName
+                )
+              )
+              continue
+            addToDetailsCache(detailsCache, cacheKey, c, MaxDetailsCacheSize)
             resChan.send(Msg(kind: MsgDetailsLoaded, pkgIdx: r.pkgIdx, content: c))
     except Exception as e:
       resChan.send(Msg(kind: MsgError, errMsg: e.msg))

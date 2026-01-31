@@ -5,7 +5,7 @@ import ui/[tui, keyboard, terminal as term]
 import core/[types, state, engine]
 import pkgs/manager
 
-const ParunVersion* = "0.5.1"
+const ParunVersion* = "0.5.3"
 
 proc main() =
   var
@@ -29,25 +29,31 @@ proc main() =
       of "aur":
         startMode = ModeAUR
       else:
-        discard
+        stderr.writeLine("parun: unknown option -- '", key, "'")
+        stderr.writeLine("Try 'parun --help' for more information.")
+        quit(1)
     else:
-      discard
+      # Non-option arguments are not supported
+      if kind == cmdArgument:
+        stderr.writeLine("parun: unexpected argument '", key, "'")
+        stderr.writeLine("Try 'parun --help' for more information.")
+        quit(1)
 
   var origTerm = initTerminal()
   initPackageManager()
 
   var appState = newState(startMode, startShowDetails, startNimble)
 
+  # Async I/O Setup
+  let selector = newSelector[int]()
+  selector.registerHandle(STDIN_FILENO, {Event.Read}, 0)
+  selector.registerHandle(resizePipe[0], {Event.Read}, 1)
+
   # Initial data load
   # Preload everything to ensure instant switching (Zero Latency)
   requestLoadAll(appState.searchId)
   requestLoadAur(appState.searchId)
   requestLoadNimble(appState.searchId)
-
-  # Async I/O Setup
-  let selector = newSelector[int]()
-  selector.registerHandle(STDIN_FILENO, {Event.Read}, 0)
-  selector.registerHandle(resizePipe[0], {Event.Read}, 1)
 
   defer:
     selector.close()
@@ -119,16 +125,21 @@ proc main() =
 
     # Rendering
     if appState.needsRedraw:
-      let res = renderUi(appState, renderBuffer, termH, termW)
-      stdout.write("\e[?25l")
-      setCursorPos(0, 0)
-      stdout.write(renderBuffer)
+      try:
+        let res = renderUi(appState, renderBuffer, termH, termW)
+        stdout.write("\e[?25l")
+        setCursorPos(0, 0)
+        stdout.write(renderBuffer)
 
-      setCursorPos(res.cursorX, res.cursorY)
-      stdout.write("\e[?25h")
+        setCursorPos(res.cursorX, res.cursorY)
+        stdout.write("\e[?25h")
 
-      stdout.flushFile()
-      appState.needsRedraw = false
+        stdout.flushFile()
+        appState.needsRedraw = false
+      except IOError:
+        # Ignore EAGAIN errors during rapid terminal resize
+        # Terminal will redraw on next iteration
+        discard
 
       # Lazy details loading with speculative pre-fetching (Zero Latency)
       if appState.showDetails and appState.visibleIndices.len > 0:
@@ -153,11 +164,13 @@ proc main() =
               )
 
     # Event Waiting (Input or Resize)
-    let ready = selector.select(20)
+    let ready = selector.select(16)
     for key in ready:
       if key.fd == resizePipe[0]:
+        # Drain all pending resize events at once (coalescing)
         var b: char
-        discard posix.read(resizePipe[0], addr b, 1)
+        while posix.read(resizePipe[0], addr b, 1) > 0:
+          discard
         appState.needsRedraw = true
       elif key.fd == STDIN_FILENO:
         let k = getKeyAsync()

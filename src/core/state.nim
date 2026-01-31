@@ -9,15 +9,31 @@ import types
 proc appendFromArena*(
     state: AppState, offset, len: int, buffer: var string, maxLen: int = -1
 ) {.inline.} =
+  ## Appends data from text arena to buffer with bounds checking
+  ## Following DOD: Inline for performance, checks for safety
+
+  # Validate offset and length are non-negative
+  if offset < 0 or len < 0:
+    return
+
+  # Calculate actual copy length respecting maxLen
   var copyLen = len
   if maxLen >= 0 and maxLen < len:
     copyLen = maxLen
   if copyLen <= 0:
     return
 
+  # Critical bounds check: ensure we don't read past arena end
+  let endOffset = offset + copyLen
+  if endOffset > state.textArena.len:
+    # Clamp to available data
+    copyLen = state.textArena.len - offset
+    if copyLen <= 0:
+      return
+
   let currentLen = buffer.len
   buffer.setLen(currentLen + copyLen)
-  if state.textArena.len > 0:
+  if state.textArena.len > 0 and copyLen > 0:
     copyMem(addr buffer[currentLen], unsafeAddr state.textArena[offset], copyLen)
 
 proc appendName*(state: AppState, idx: int, buffer: var string, maxLen: int = -1) =
@@ -182,12 +198,30 @@ proc initStringArena*(capacity: int): StringArena =
   StringArena(buffer: buffer, capacity: capacity, offset: 0)
 
 proc allocString*(arena: var StringArena, s: string): StringArenaHandle =
+  ## Allocates string in arena with overflow protection
+  ## Following DOD: Arena resets when full, raises on oversized strings
   let requiredLen = s.len
+
+  # Check if string is too large for this arena
+  if requiredLen > arena.capacity:
+    raise newException(
+      IndexDefect,
+      "String too large for arena: " & $requiredLen & " > " & $arena.capacity,
+    )
+
+  # Reset arena if allocation would overflow
   if arena.offset + requiredLen > arena.capacity:
     arena.offset = 0
-    if requiredLen > arena.capacity:
-      raise newException(IndexDefect, "String too large")
-  copyMem(addr arena.buffer[arena.offset], unsafeAddr s[0], requiredLen)
+
+  # Final safety check after reset
+  if arena.offset + requiredLen > arena.capacity:
+    # This should not happen if capacity >= requiredLen, but check anyway
+    raise newException(IndexDefect, "Arena allocation failed after reset")
+
+  # Safe copy with bounds checking
+  if requiredLen > 0:
+    copyMem(addr arena.buffer[arena.offset], unsafeAddr s[0], requiredLen)
+
   result = StringArenaHandle(startOffset: arena.offset, length: requiredLen)
   arena.offset += requiredLen
 

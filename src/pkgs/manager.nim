@@ -3,6 +3,56 @@ import std/[os, osproc, strutils]
 import ../core/types
 import worker_types, worker
 
+const
+  ValidPkgNameChars = {'a' .. 'z', 'A' .. 'Z', '0' .. '9', '-', '.', '+', '_', '@'}
+  ValidRepoChars = {'a' .. 'z', 'A' .. 'Z', '0' .. '9', '-', '_', '.'}
+  MaxPkgNameLen = 256
+
+proc isValidPackageName*(name: string): bool =
+  ## Validates package name to prevent command injection
+  ## Supports format: "name" or "repo/name"
+  ## Allowed in name: alphanumeric, hyphen, dot, plus, underscore, at-sign
+  if name.len == 0 or name.len > MaxPkgNameLen:
+    return false
+
+  # Check for dangerous patterns first
+  if name.contains("..") or name.contains("\\") or name.contains(";") or
+      name.contains("|") or name.contains("&") or name.contains("$"):
+    return false
+
+  # Handle repo/name format
+  let slashCount = name.count('/')
+  if slashCount > 1:
+    return false # Only one / allowed
+  elif slashCount == 1:
+    # Validate repo/name format
+    let parts = name.split('/', 1)
+    if parts.len != 2:
+      return false
+    let repo = parts[0]
+    let pkg = parts[1]
+
+    # Validate repo part
+    if repo.len == 0 or repo.len > 64:
+      return false
+    for c in repo:
+      if c notin ValidRepoChars:
+        return false
+
+    # Validate package name part
+    if pkg.len == 0 or pkg.len > MaxPkgNameLen:
+      return false
+    for c in pkg:
+      if c notin ValidPkgNameChars:
+        return false
+    return true
+  else:
+    # Simple package name (no repo)
+    for c in name:
+      if c notin ValidPkgNameChars:
+        return false
+    return true
+
 func createPacmanToolDef(binName: string, withSudo: bool): ToolDef =
   ToolDef(
     bin: binName,
@@ -31,6 +81,8 @@ const Tools*: array[PkgManagerType, ToolDef] = [
 ]
 
 var
+  ## Thread-safe channels for worker communication
+  ## Nim channels are lock-free and thread-safe by design
   reqChan: Channel[WorkerReq]
   resChan: Channel[Msg]
   workerThread: Thread[
@@ -119,9 +171,19 @@ proc runTransaction*(tool: PkgManagerType, targets: seq[string], install: bool):
   return execCmd(cmd)
 
 proc installPackages*(names: seq[string], source: DataSource): int =
+  ## Installs packages with validation to prevent command injection
+  for name in names:
+    if not isValidPackageName(name):
+      stderr.writeLine("Error: Invalid package name: ", name)
+      return 1
   let tool = if source == SourceNimble: ManNimble else: activeTool
   return runTransaction(tool, names, true)
 
 proc uninstallPackages*(names: seq[string], source: DataSource): int =
+  ## Uninstalls packages with validation to prevent command injection
+  for name in names:
+    if not isValidPackageName(name):
+      stderr.writeLine("Error: Invalid package name: ", name)
+      return 1
   let tool = if source == SourceNimble: ManNimble else: activeTool
   return runTransaction(tool, names, false)

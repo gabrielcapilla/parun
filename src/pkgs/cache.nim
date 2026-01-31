@@ -46,6 +46,40 @@ type
   ZeroAllocCallback* =
     proc(name: openArray[char], version: openArray[char]) {.closure, gcsafe.}
 
+proc validateCacheFile*(path: string): bool =
+  ## Validates cache file integrity
+  ## Checks: existence, minimum size, magic header
+  if not fileExists(path):
+    return false
+
+  let size = getFileSize(path)
+  if size < 16: # Minimum: 4 (magic) + 4 (version) + 4 (count) + at least 4 bytes data
+    return false
+
+  # Validate magic header
+  var fs = newFileStream(path, fmRead)
+  if fs == nil:
+    return false
+
+  var magic: array[4, char]
+  try:
+    if fs.readData(addr magic[0], 4) != 4:
+      fs.close()
+      return false
+    fs.close()
+
+    # Check magic bytes
+    if magic[0] != 'P' or magic[1] != 'A' or magic[2] != 'R' or magic[3] != 'U':
+      return false
+
+    return true
+  except:
+    try:
+      fs.close()
+    except:
+      discard
+    return false
+
 proc writeHeader(s: Stream, count: uint32) =
   s.write(BinaryMagic)
   s.write(BinaryVersion.int32)
@@ -338,7 +372,7 @@ proc getCacheStatus*(cache: PackageCache): CacheStatus =
   return CacheFresh
 
 proc downloadCompressedGzOnly(url: string, gzOutputPath: string): bool =
-  let downloadCmd = "curl -s " & url & " > \"" & gzOutputPath & "\""
+  let downloadCmd = "curl -sfL --max-time 60 " & url & " > \"" & gzOutputPath & "\""
   return execCmd(downloadCmd) == 0
 
 proc decompressExistingGz(gzPath: string, outputPath: string): bool =
@@ -346,15 +380,46 @@ proc decompressExistingGz(gzPath: string, outputPath: string): bool =
   return execCmd(decompressCmd) == 0
 
 proc downloadUncompressed(url: string, outputPath: string): bool =
-  let downloadCmd = "curl -s " & url & " > \"" & outputPath & "\""
+  let downloadCmd = "curl -sfL --max-time 60 " & url & " > \"" & outputPath & "\""
   return execCmd(downloadCmd) == 0
+
+proc validateJsonFile*(path: string): bool =
+  ## Validates that a file contains valid JSON
+  ## Used as integrity check for downloaded metadata
+  if not fileExists(path):
+    return false
+
+  let fs = newFileStream(path, fmRead)
+  if fs == nil:
+    return false
+
+  var parser: JsonParser
+  try:
+    parser.open(fs, path)
+    # Try to parse the first token to validate JSON structure
+    parser.next()
+    let kind = parser.kind
+    parser.close()
+    fs.close()
+    # Valid JSON starts with array or object
+    return kind == jsonArrayStart or kind == jsonObjectStart
+  except:
+    try:
+      parser.close()
+      fs.close()
+    except:
+      discard
+    return false
 
 proc ensureJsonAvailable*(cache: PackageCache): bool =
   let cacheDir = getCachePath()
   let jsonPath = cacheDir / cache.jsonPath
-  if fileExists(jsonPath):
+  if fileExists(jsonPath) and validateJsonFile(jsonPath):
     return true
-  return downloadUncompressed(cache.metaUrl, jsonPath)
+  # Download and validate
+  if not downloadUncompressed(cache.metaUrl, jsonPath):
+    return false
+  return validateJsonFile(jsonPath)
 
 proc refreshCache*(cache: var PackageCache, keepJson: bool = false): bool =
   let cacheDir = getCachePath()
@@ -371,10 +436,16 @@ proc refreshCache*(cache: var PackageCache, keepJson: bool = false): bool =
     removeFile(gzPath)
   else:
     if not downloadUncompressed(cache.metaUrl, jsonPath):
-      # If download fails, check if we have a stale json or bin
-      if fileExists(binPath) or fileExists(jsonPath):
-        return false
       return false
+
+  # Validate downloaded JSON before conversion
+  if not validateJsonFile(jsonPath):
+    # Invalid JSON - clean up and fail
+    try:
+      removeFile(jsonPath)
+    except:
+      discard
+    return false
 
   if not convertJsonToBinary(jsonPath, binPath):
     return false
@@ -397,6 +468,28 @@ proc loadOrRefreshCache*(cache: var PackageCache, keepJson: bool = false): bool 
     return fileExists(binPath)
   of CacheMissing:
     return refreshCache(cache, keepJson)
+
+proc safeLoadOrRefreshCache*(cache: var PackageCache, keepJson: bool = false): bool =
+  ## Safely loads cache with validation and automatic cleanup on corruption
+  let cacheDir = getCachePath()
+  let binPath = cacheDir / cache.binPath
+
+  if not validateCacheFile(binPath):
+    # Cache is corrupted or missing, clean up and refresh
+    if fileExists(binPath):
+      try:
+        removeFile(binPath)
+      except:
+        discard
+    let jsonPath = cacheDir / cache.jsonPath
+    if fileExists(jsonPath) and not keepJson:
+      try:
+        removeFile(jsonPath)
+      except:
+        discard
+    return loadOrRefreshCache(cache, keepJson)
+
+  return loadOrRefreshCache(cache, keepJson)
 
 proc initAurCache*(): PackageCache =
   PackageCache(
