@@ -6,8 +6,8 @@ import ../core/[types, state]
 import ../utils/utils
 
 const
-  MinTermWidth* = 50
-  MinTermHeight* = 10
+  MinTermWidth* = 80
+  MinTermHeight* = 15
   BoxTopLeft* = "╭"
   BoxTopRight* = "╮"
   BoxBottomLeft* = "╰"
