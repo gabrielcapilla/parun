@@ -139,6 +139,8 @@ type SearchContext* = object
   lowerTokens*: seq[string]
   ## SIMD vectors with the first char of each token broadcasted.
   firstCharVecs*: seq[M128i]
+  ## Total query length (sum of all tokens) for density calculation.
+  queryLen*: int
 
 func prepareSearchContext*(query: string): SearchContext =
   ## Prepares the search context for a new query.
@@ -158,6 +160,7 @@ func prepareSearchContext*(query: string): SearchContext =
     if token.len > 0:
       result.lowerTokens[i] = token.toLowerAscii()
       result.firstCharVecs[i] = mm_set1_epi8(token[0].toLowerAscii.ord.int8)
+      result.queryLen += token.len
 
 when defined(amd64) or (defined(i386) and defined(sse2)):
   ## SSE2 exact search implementation
@@ -333,7 +336,8 @@ func scorePackageSimd*(textPtr: ptr char, len: int, ctx: SearchContext): int =
     totalScore += s
 
   # Boost for matches in short strings (higher density)
-  let density = float(ctx.tokens.join(" ").len) / float(len)
+  # Using pre-computed queryLen instead of joining tokens every time
+  let density = float(ctx.queryLen) / float(len)
   totalScore = int(float(totalScore) * (1.0 + density))
 
   return min(totalScore, 999)

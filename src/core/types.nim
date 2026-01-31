@@ -129,9 +129,20 @@ type
     indices*: array[2000, int32]
     ## SIMD relevance score.
     scores*: array[2000, int]
-    ## Current count of valid results.
-    count*: int
+    ## Current count of valid results (capped at 2000).
+    count*: int32
 
+const MaxResultsCount* = 2000
+
+func safeAddResultsCount*(current: int32, delta: int32): int32 {.inline.} =
+  ## Safely adds to results count with overflow protection
+  ## Returns: min(current + delta, MaxResultsCount)
+  let sum = int64(current) + int64(delta)
+  if sum > MaxResultsCount:
+    return MaxResultsCount.int32
+  return sum.int32
+
+type
   StringArenaHandle* = object
     ## Lightweight reference to a string within a `StringArena`.
     ##
