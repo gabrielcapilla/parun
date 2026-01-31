@@ -45,6 +45,8 @@ function check_dependencies() {
   command -v curl &>/dev/null || log_error "curl is not installed"
   command -v file &>/dev/null || log_error "file is not installed"
   command -v sha256sum &>/dev/null || log_error "sha256sum is not installed"
+  command -v xxd &>/dev/null || log_error "xxd is not installed (package: vim or xxd)"
+  command -v readelf &>/dev/null || log_error "readelf is not installed (package: binutils)"
 }
 
 # Check available disk space
@@ -95,11 +97,44 @@ function get_download_url() {
 }
 
 # Validate that downloaded file is a valid ELF executable
-function validate_elf() {
+function validate_binary() {
   local file="$1"
 
-  if ! file "${file}" | grep -q "ELF 64-bit LSB.*executable"; then
-    log_error "Invalid ELF file: downloaded file is not a valid 64-bit executable"
+  # Check file exists and is not empty
+  if [[ ! -s "${file}" ]]; then
+    log_error "Downloaded file is empty"
+  fi
+
+  # Check ELF magic bytes
+  local magic
+  magic=$(xxd -l 4 "${file}" 2>/dev/null | head -1)
+  if [[ ! "$magic" =~ "7f454c46" ]]; then
+    log_error "Invalid file: does not have ELF magic bytes"
+  fi
+
+  # Check it's a 64-bit executable
+  if ! file "${file}" | grep -q "ELF 64-bit"; then
+    log_error "Invalid ELF file: not a 64-bit executable"
+  fi
+
+  # Check it's an executable (not a shared library or relocatable)
+  if ! file "${file}" | grep -q "executable"; then
+    log_error "Invalid ELF file: not an executable"
+  fi
+
+  # Check it's not a text file disguised as binary
+  if file "${file}" | grep -qi "text\|ascii"; then
+    log_error "Invalid file: appears to be a text file"
+  fi
+
+  # Verify ELF header integrity with readelf
+  if ! readelf -h "${file}" &>/dev/null; then
+    log_error "Invalid ELF file: corrupted header"
+  fi
+
+  # Check for required sections
+  if ! readelf -S "${file}" &>/dev/null; then
+    log_error "Invalid ELF file: no section headers"
   fi
 }
 
@@ -119,7 +154,7 @@ function download_binary() {
 
   [[ -f "${TEMP_FILE}" ]] || log_error "Download failed: file not created"
 
-  validate_elf "${TEMP_FILE}"
+  validate_binary "${TEMP_FILE}"
 }
 
 # Install binary to target directory
