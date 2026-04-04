@@ -1,5 +1,5 @@
 import std/[json, os, osproc, parseopt, strutils]
-import ../src/pkgs/[index_builder, indexes]
+import ../src/storage/[index_builder, indexes]
 
 type
   Options = object

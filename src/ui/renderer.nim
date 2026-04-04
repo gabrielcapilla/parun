@@ -3,7 +3,7 @@
 
 import std/[strutils, tables]
 import ../core/[types, state]
-import ../pkgs/indexes
+import ../storage/indexes
 import ../utils/utils
 
 const

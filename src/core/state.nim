@@ -4,7 +4,7 @@
 
 import std/[tables, math, monotimes, bitops]
 import types
-import ../pkgs/[index_builder, indexes]
+import ../storage/[index_builder, indexes]
 import systems/search_system
 
 proc appendFromArena*(

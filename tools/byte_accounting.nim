@@ -1,7 +1,8 @@
 import std/[algorithm, json, monotimes, os, osproc, parseopt, strutils, tables, times]
 import ../src/core/[state, types]
 import ../src/core/systems/update_system
-import ../src/pkgs/[indexes, manager]
+import ../src/pkgs/manager
+import ../src/storage/indexes
 import ../src/utils/[memory_accounting, procfs_metrics]
 
 type

@@ -2,7 +2,7 @@
 
 import std/[strformat]
 import ../core/[types, state]
-import ../pkgs/indexes
+import ../storage/indexes
 import renderer
 
 type RenderResult* = tuple[cursorX: int, cursorY: int]

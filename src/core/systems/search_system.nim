@@ -1,6 +1,6 @@
 import std/[strutils, bitops]
 import ../types
-import ../../pkgs/indexes
+import ../../storage/indexes
 import ../../utils/simd
 
 proc filterIndices*(

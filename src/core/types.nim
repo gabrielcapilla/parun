@@ -8,7 +8,7 @@
 
 import std/[tables, monotimes, strutils]
 import ../utils/memory_accounting
-import ../pkgs/indexes
+import ../storage/indexes
 
 const
   ## Max number of package details cached in RAM.
@@ -319,14 +319,14 @@ type
     wrappedDetails*: seq[string]
 
     # Modes
+    lastDetailIdx*: int32
+    pendingDetailIdx*: int32
     searchMode*: SearchMode
     dataSource*: DataSource
     ## Mode to return to after exiting AUR/Nimble.
     baseSearchMode*: SearchMode
     baseDataSource*: DataSource
     activeSlot*: SourceSlot
-    lastDetailIdx*: int32
-    pendingDetailIdx*: int32
     pendingDetailSlot*: SourceSlot
     detailRequestInFlight*: bool
 

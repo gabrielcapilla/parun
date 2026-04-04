@@ -3,7 +3,8 @@
 import std/[posix, tables, terminal, selectors, strutils, parseopt, bitops, monotimes, times]
 import ui/[tui, keyboard, terminal as term]
 import core/[types, state, engine]
-import pkgs/[indexes, manager]
+import pkgs/manager
+import storage/indexes
 
 const ParunVersion* = "0.5.3"
 

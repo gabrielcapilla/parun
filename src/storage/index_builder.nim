@@ -1,6 +1,7 @@
 import std/[os, osproc, streams, strutils, tables]
-import cache, indexes
-import backends/pacman
+import indexes
+import ../pkgs/cache
+import ../pkgs/backends/pacman
 
 proc defaultRuntimeIndexDir*(): string =
   getCachePath() / "indexes"

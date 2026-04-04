@@ -96,6 +96,8 @@ const
     "bucket_ids",
   ]
 
+var prefaultTouchSink: uint8
+
 proc addLe16(dst: var string, value: uint16) =
   dst.add(char(value and 0xFF))
   dst.add(char((value shr 8) and 0xFF))
@@ -317,7 +319,7 @@ proc prefaultHotSections*(view: ptr SourceIndexView) =
     sink = sink xor ptrData[bytes - 1]
   if view[].packageCount > 0:
     sink = sink xor uint8(view.getNameLen(0))
-  discard sink
+  prefaultTouchSink = sink
 
 proc close*(view: var SourceIndexView) =
   if view.mapped:

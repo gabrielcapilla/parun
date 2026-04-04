@@ -38,7 +38,7 @@ This document is the Phase 1 ownership contract for the future indexed runtime.
 
 - [filterIndices](/home/human/Git/Public/parun/src/core/systems/search_system.nim#L4) reads package names from the arena through pointer plus length access rather than allocating names per candidate.
 - [withBinaryCache](/home/human/Git/Public/parun/src/pkgs/cache.nim#L169) already demonstrates a memory-mapped, pointer-based iteration pattern suitable for immutable indexes.
-- [validateSourceIndex](/home/human/Git/Public/parun/src/pkgs/indexes.nim) now validates directly over a mapped file instead of heap-loading the full artifact.
+- [validateSourceIndex](/home/human/Git/Public/parun/src/storage/indexes.nim) now validates directly over a mapped file instead of heap-loading the full artifact.
 - [manager.nim](/home/human/Git/Public/parun/src/pkgs/manager.nim) now keeps the worker cold until details or diagnostics are actually requested.
 
 ## Phase 1 Diagnostics Contract
