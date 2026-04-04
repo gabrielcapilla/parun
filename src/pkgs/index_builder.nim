@@ -5,6 +5,11 @@ import backends/pacman
 proc defaultRuntimeIndexDir*(): string =
   getCachePath() / "indexes"
 
+proc copyChars(chars: openArray[char]): string =
+  result = newString(chars.len)
+  for i in 0 ..< chars.len:
+    result[i] = chars[i]
+
 proc loadInstalledMap(): Table[string, string] =
   let (output, exitCode) = execCmdEx("pacman -Q")
   if exitCode != 0:
@@ -56,7 +61,7 @@ proc collectAurPackages(installedMap: Table[string, string]): seq[IndexedPackage
     result.add(
       IndexedPackageRecord(
         name: nameBuf,
-        version: $version,
+        version: copyChars(version),
         repo: "aur",
         installed: installedMap.hasKey(nameBuf),
       )
@@ -91,7 +96,7 @@ proc collectNimblePackages(installed: Table[string, bool]): seq[IndexedPackageRe
     result.add(
       IndexedPackageRecord(
         name: nameBuf,
-        version: $version,
+        version: copyChars(version),
         repo: "nimble",
         installed: installed.hasKey(nameBuf),
       )

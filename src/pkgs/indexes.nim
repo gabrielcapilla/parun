@@ -2,7 +2,7 @@ import std/[memfiles, os, streams, strutils, tables]
 
 const
   SourceIndexMagic* = "PRIX"
-  SourceIndexVersion* = 2'u32
+  SourceIndexVersion* = 3'u32
   SourceIndexHeaderBytes* = 32'u32
   SectionNameBytes = 16
   BucketCount* = 256

@@ -18,7 +18,7 @@ This is the Phase 2 binary contract for offline-built, immutable source indexes.
 Bytes 0-31:
 
 - `magic[4]`: `PRIX`
-- `version[u32]`: `2`
+- `version[u32]`: `3`
 - `source_kind[u32]`: `0=system`, `1=aur`, `2=nimble`
 - `package_count[u32]`
 - `repo_count[u32]`
@@ -71,7 +71,7 @@ Cold display path:
 ## Validation Rules
 
 - The file must start with `PRIX`.
-- The version must be exactly `2`.
+- The version must be exactly `3`.
 - `header_bytes` must be exactly `32`.
 - Every section range must stay within file bounds.
 - `source_kind` must map to a known source enum.
