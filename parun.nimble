@@ -1,11 +1,11 @@
 # Package
 
-version = "0.5.3"
-author = "Gabriel Capilla"
-description = "Terminal UI for pacman, AUR & nimble"
-license = "MIT"
-srcDir = "src"
-bin = @["parun"]
+version       = "0.5.3"
+author        = "Gabriel Capilla"
+description   = "Terminal UI for pacman, AUR & nimble"
+license       = "MIT"
+srcDir        = "src"
+bin           = @["parun"]
 
 # Dependencies
 
