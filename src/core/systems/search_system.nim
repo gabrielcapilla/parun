@@ -1,11 +1,11 @@
 import std/[strutils, bitops]
 import ../types
+import ../../pkgs/indexes
 import ../../utils/simd
 
 proc filterIndices*(
     query: string,
-    soa: PackageSOA,
-    textArena: openArray[char],
+    view: ptr SourceIndexView,
     results: var seq[int32],
 ) =
   ## Filtering System (Hot Path).
@@ -15,14 +15,14 @@ proc filterIndices*(
 
   let effective = getEffectiveQuery(query)
   let cleanQuery = effective.strip()
-  let totalPkgs = soa.hot.locators.len
+  let totalPkgs = packageCount(view)
   let filterInstalled = query.startsWith("installed/") or query.startsWith("i/")
 
   if cleanQuery.len == 0:
     if filterInstalled:
       results.setLen(0)
       for i in 0 ..< totalPkgs:
-        if isInstalled(soa, i):
+        if isInstalled(view, i):
           results.add(int32(i))
     else:
       results.setLen(totalPkgs)
@@ -37,21 +37,32 @@ proc filterIndices*(
   var buf: ResultsBuffer
   buf.count = 0
 
-  if textArena.len == 0:
+  if not valid(view):
     return
-  let arenaBase = cast[int](unsafeAddr textArena[0])
+  let firstToken = ctx.lowerTokens[0]
+  let hasBucket =
+    firstToken.len > 0 and firstToken[0].ord >= 0 and firstToken[0].ord <= 255
+  let candidateRange =
+    if hasBucket:
+      bucketRange(view, uint8(ord(firstToken[0])))
+    else:
+      0 ..< totalPkgs
 
-  for i in 0 ..< totalPkgs:
+  for candidatePos in candidateRange:
     if buf.count >= 2000:
       break
 
-    if filterInstalled and not isInstalled(soa, i):
+    let i =
+      if hasBucket:
+        bucketIdAt(view, candidatePos)
+      else:
+        candidatePos
+
+    if filterInstalled and not isInstalled(view, i):
       continue
 
-    let offset = int(soa.hot.locators[i])
-    let namePtr = cast[ptr char](arenaBase + offset)
-
-    let s = scorePackageSimd(namePtr, int(soa.hot.nameLens[i]), ctx)
+    let namePtr = lowerNamePtr(view, i)
+    let s = scorePackageSimd(namePtr, getLowerLen(view, i), ctx)
     if s > 0:
       buf.indices[buf.count] = int32(i)
       buf.scores[buf.count] = s

@@ -54,6 +54,26 @@ Type prefixes to switch between package sources:
 - **nim/** · Search Nimble packages (alias: `n/`, `nimble/`)
 - **installed/** · Show only installed packages (alias: `i/`)
 
+## Runtime Engineering
+
+Parun now uses immutable memory-mapped source indexes for local, AUR, and Nimble search. The interactive path keeps package corpora out of mutable heap state and only promotes owned strings at explicit cold boundaries such as details and package transactions.
+
+Key maintenance commands:
+
+```bash
+nimble buildIndexes
+nimble measureBaseline
+nimble byteAccounting
+nimble verifyRuntime
+```
+
+Current enforced budgets for the indexed runtime:
+
+- idle `RSS <= 12 MiB`
+- idle `PSS <= 8 MiB`
+- idle `Private_Dirty <= 6 MiB`
+- visible `aur/` and `nim/` switch latency `<= 25 ms`
+
 ---
 
 Parun internally uses `pacman`, `paru`/`yay`, and `nimble` commands.

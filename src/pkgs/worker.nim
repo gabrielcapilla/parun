@@ -5,6 +5,7 @@ import
       parseutils,
     ]
 import ../core/types
+import ../utils/memory_accounting
 import cache, worker_types
 import backends/[pacman, nimble]
 
@@ -63,6 +64,34 @@ proc execWithErrorCheck(cmd: string, mode: ExecMode = emStrict): ExecResult =
 
   return (output, true)
 
+proc buildWorkerMemoryReport(
+    detailsCache: Table[string, string],
+    nimbleMetaCache: Table[string, NimbleMeta],
+    globalInstMap: Table[string, string],
+    detailBatch: seq[WorkerReq],
+    client: HttpClient,
+): WorkerMemoryReport =
+  var cacheSection = MemorySection(name: "worker_caches")
+  cacheSection.addTableMetric(
+    "details_cache", detailsCache, "Worker-side detail text cache"
+  )
+  cacheSection.addTableMetric(
+    "nimble_meta_cache", nimbleMetaCache, "Cached Nimble package metadata"
+  )
+  cacheSection.addTableMetric(
+    "installed_package_map", globalInstMap, "Installed package lookup map"
+  )
+  cacheSection.addSeqMetric(
+    "detail_batch", detailBatch, "Pending detail requests coalesced in worker"
+  )
+
+  var runtimeSection = MemorySection(name: "worker_runtime")
+  runtimeSection.addScalarMetric(
+    "http_client_struct", sizeof(client), "HttpClient object size only; stdlib internals not expanded"
+  )
+
+  result.sections = @[cacheSection, runtimeSection]
+
 proc workerLoop*(
     toolType: PkgManagerType,
     reqChan: var Channel[WorkerReq],
@@ -96,6 +125,15 @@ proc workerLoop*(
       of ReqStop:
         client.close()
         break
+      of ReqDiagnostics:
+        resChan.send(
+          Msg(
+            kind: MsgWorkerDiagnostics,
+            workerReport: buildWorkerMemoryReport(
+              detailsCache, nimbleMetaCache, globalInstMap, detailBatch, client
+            ),
+          )
+        )
       of ReqLoadAll:
         let tStart = getMonoTime()
         let (instOut, exitCode) = execCmdEx("pacman -Q")

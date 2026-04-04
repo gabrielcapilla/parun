@@ -64,38 +64,60 @@ var
   resChan: Channel[Msg]
   workerThread: Thread[WorkerThreadArgs]
   activeTool*: PkgManagerType
+  dispatchInstalled: bool
+  workerRunning: bool
 
 # Wrapper for thread creation due to closure limitations or parameter count
 proc threadEntry(args: WorkerThreadArgs) {.thread.} =
   workerLoop(args.toolType, args.reqChan[], args.resChan[])
 
+proc ensureWorkerRunning() =
+  if workerRunning:
+    return
+  reqChan.open()
+  resChan.open()
+  createThread(
+    workerThread,
+    threadEntry,
+    WorkerThreadArgs(toolType: activeTool, reqChan: addr reqChan, resChan: addr resChan),
+  )
+  workerRunning = true
+
 proc enqueueLoadAll(id: int) {.gcsafe.} =
+  ensureWorkerRunning()
   reqChan.send(WorkerReq(kind: ReqLoadAll, searchId: id))
 
 proc enqueueLoadAur(id: int) {.gcsafe.} =
+  ensureWorkerRunning()
   reqChan.send(WorkerReq(kind: ReqLoadAur, searchId: id))
 
 proc enqueueLoadNimble(id: int) {.gcsafe.} =
+  ensureWorkerRunning()
   reqChan.send(WorkerReq(kind: ReqLoadNimble, searchId: id))
 
 proc enqueueSearch(query: string, id: int) {.gcsafe.} =
+  ensureWorkerRunning()
   reqChan.send(WorkerReq(kind: ReqSearch, query: query, searchId: id))
 
 proc enqueueDetails(idx: int32, name, repo: string, source: DataSource) {.gcsafe.} =
+  ensureWorkerRunning()
   reqChan.send(
     WorkerReq(
       kind: ReqDetails, pkgIdx: idx, pkgName: name, pkgRepo: repo, source: source
     )
   )
 
+proc requestWorkerDiagnostics*() =
+  ensureWorkerRunning()
+  reqChan.send(WorkerReq(kind: ReqDiagnostics))
+
 proc initPackageManager*() =
   ## Initializes the worker thread and detects package manager (paru/yay/pacman).
-  reqChan.open()
-  resChan.open()
-
-  installRequestDispatch(
-    enqueueLoadAll, enqueueLoadAur, enqueueLoadNimble, enqueueSearch, enqueueDetails
-  )
+  if not dispatchInstalled:
+    installRequestDispatch(
+      enqueueLoadAll, enqueueLoadAur, enqueueLoadNimble, enqueueSearch, enqueueDetails
+    )
+    dispatchInstalled = true
 
   if findExe("paru").len > 0:
     activeTool = ManParu
@@ -104,22 +126,21 @@ proc initPackageManager*() =
   else:
     activeTool = ManPacman
 
-  createThread(
-    workerThread,
-    threadEntry,
-    WorkerThreadArgs(toolType: activeTool, reqChan: addr reqChan, resChan: addr resChan),
-  )
-
 proc shutdownPackageManager*() =
   ## Stops the worker thread and closes channels.
+  if not workerRunning:
+    return
   reqChan.send(WorkerReq(kind: ReqStop))
-  # workerThread.join() # Optional but safer
+  joinThread(workerThread)
   reqChan.close()
   resChan.close()
+  workerRunning = false
 
 proc pollWorkerMessages*(messages: var seq[Msg]) =
   ## Retrieves all pending messages from the worker into a reusable buffer.
   messages.setLen(0)
+  if not workerRunning:
+    return
   while true:
     let (ok, msg) = resChan.tryRecv()
     if not ok:

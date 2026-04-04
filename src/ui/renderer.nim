@@ -3,6 +3,7 @@
 
 import std/[strutils, tables]
 import ../core/[types, state]
+import ../pkgs/indexes
 import ../utils/utils
 
 const
@@ -36,24 +37,20 @@ proc appendSpaces*(buffer: var string, count: int) =
 
 proc appendRow*(
     buffer: var string,
-    soa: PackageSOA,
-    textArena: openArray[char],
-    repoOffsets: openArray[uint16],
-    repoLens: openArray[uint8],
-    repoArena: openArray[char],
+    view: ptr SourceIndexView,
     idx: int32,
     width: int,
     isCursor, isSelected: bool,
 ) =
   ## Renders a single row of the package list.
   let i = int(idx)
-  let isInstalled = isInstalled(soa, i)
+  let isInstalled = isInstalled(view, i)
   let tagW = if isInstalled: InstalledLen else: 0
   let maxTextW = max(0, width - PrefixLen - tagW)
 
-  let repoLen = getRepoLen(soa, repoLens, i)
-  let nameLen = getNameLen(soa, i)
-  let verLen = getVersionLen(soa, i)
+  let repoLen = getRepoLen(view, i)
+  let nameLen = getNameLen(view, i)
+  let verLen = getVersionLen(view, i)
 
   var printRepoLen = repoLen
   var printNameLen = nameLen
@@ -87,29 +84,29 @@ proc appendRow*(
   buffer.add(PrefixLUT[styleIdx])
 
   if isCursor:
-    appendRepo(soa, repoOffsets, repoLens, repoArena, i, buffer, printRepoLen)
+    appendRepo(view, i, buffer, printRepoLen)
     if hasSlash:
       buffer.add(SepSlash)
-      appendName(soa, textArena, i, buffer, printNameLen)
+      appendName(view, i, buffer, printNameLen)
     if hasSpace:
       buffer.add(Space)
-      appendVersion(soa, textArena, i, buffer, printVerLen)
+      appendVersion(view, i, buffer, printVerLen)
   else:
     buffer.add(ColorRepo)
-    appendRepo(soa, repoOffsets, repoLens, repoArena, i, buffer, printRepoLen)
+    appendRepo(view, i, buffer, printRepoLen)
     buffer.add(Reset)
 
     if hasSlash:
       buffer.add(SepSlash)
       buffer.add(ColorPkg)
       buffer.add(AnsiBold)
-      appendName(soa, textArena, i, buffer, printNameLen)
+      appendName(view, i, buffer, printNameLen)
       buffer.add(Reset)
 
     if hasSpace:
       buffer.add(Space)
       buffer.add(ColorVer)
-      appendVersion(soa, textArena, i, buffer, printVerLen)
+      appendVersion(view, i, buffer, printVerLen)
       buffer.add(Reset)
 
   if isInstalled:

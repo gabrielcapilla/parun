@@ -2,6 +2,7 @@
 
 import std/[strformat]
 import ../core/[types, state]
+import ../pkgs/indexes
 import renderer
 
 type RenderResult* = tuple[cursorX: int, cursorY: int]
@@ -105,6 +106,7 @@ proc renderUi*(
     else:
       0
   let detailTextW = max(0, detailTotalW - 2)
+  let view = state.activeView
 
   for r in 0 ..< listH:
     let rowIdx = state.scroll + (listH - 1 - r)
@@ -112,11 +114,7 @@ proc renderUi*(
       let realIdx = state.visibleIndices[rowIdx]
       appendRow(
         buffer,
-        state.soa,
-        state.textArena,
-        state.repoOffsets,
-        state.repoLens,
-        state.repoArena,
+        view,
         realIdx,
         listW,
         rowIdx == state.cursor,
@@ -136,7 +134,7 @@ proc renderUi*(
   let cx = renderStatusBar(
     buffer,
     state.visibleIndices.len,
-    state.soa.hot.locators.len,
+    packageCount(view),
     state.selectionBits,
     state.viewingSelection,
     state.dataSource,

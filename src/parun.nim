@@ -3,7 +3,7 @@
 import std/[posix, tables, terminal, selectors, strutils, parseopt, bitops]
 import ui/[tui, keyboard, terminal as term]
 import core/[types, state, engine]
-import pkgs/manager
+import pkgs/[indexes, manager]
 
 const ParunVersion* = "0.5.3"
 
@@ -43,20 +43,16 @@ proc main() =
   initPackageManager()
 
   var appState = newState(startMode, startShowDetails, startNimble)
+  appState.prepareIndexedSources()
 
   # Async I/O Setup
   let selector = newSelector[int]()
   selector.registerHandle(STDIN_FILENO, {Event.Read}, 0)
   selector.registerHandle(resizePipe[0], {Event.Read}, 1)
 
-  # Initial data load
-  # Preload everything to ensure instant switching (Zero Latency)
-  requestLoadAll(appState.searchId)
-  requestLoadAur(appState.searchId)
-  requestLoadNimble(appState.searchId)
-
   defer:
     selector.close()
+    closeIndexedSources(appState)
     restoreTerminal(origTerm)
     shutdownPackageManager()
 
@@ -74,7 +70,8 @@ proc main() =
     if appState.shouldInstall or appState.shouldUninstall:
       transactionTargets.setLen(0)
       let selCount = getSelectedCount(appState.selectionBits)
-      let totalPkgs = appState.soa.hot.locators.len
+      let totalPkgs = currentPackageCount(appState)
+      let view = appState.activeView
 
       if selCount > 0:
         for i, word in appState.selectionBits:
@@ -84,34 +81,22 @@ proc main() =
             if testBit(word, bit):
               let realIdx = i * 64 + bit
               if realIdx < totalPkgs:
-                let name = getName(appState.soa, appState.textArena, realIdx)
+                let name = copyName(view, realIdx)
                 if appState.shouldInstall:
                   if appState.dataSource == SourceNimble:
                     transactionTargets.add(name)
                   else:
-                    transactionTargets.add(
-                      getRepo(
-                        appState.soa,
-                        appState.repoOffsets,
-                        appState.repoLens,
-                        appState.repoArena,
-                        realIdx,
-                      ) & "/" & name
-                    )
+                    transactionTargets.add(copyRepo(view, realIdx) & "/" & name)
                 else:
                   transactionTargets.add(name)
       elif appState.visibleIndices.len > 0:
         let idx = int(appState.visibleIndices[appState.cursor])
-        let name = getName(appState.soa, appState.textArena, idx)
+        let name = copyName(view, idx)
         if appState.shouldInstall:
           if appState.dataSource == SourceNimble:
             transactionTargets.add(name)
           else:
-            transactionTargets.add(
-              getRepo(
-                appState.soa, appState.repoOffsets, appState.repoLens, appState.repoArena, idx
-              ) & "/" & name
-            )
+            transactionTargets.add(copyRepo(view, idx) & "/" & name)
         else:
           transactionTargets.add(name)
 
@@ -147,6 +132,7 @@ proc main() =
 
       # Lazy details loading with speculative pre-fetching (Zero Latency)
       if appState.showDetails and appState.visibleIndices.len > 0:
+        let view = appState.activeView
         let currentCursor = appState.cursor
         # Priority: Current element
         let idx = appState.visibleIndices[currentCursor]
@@ -154,10 +140,8 @@ proc main() =
           let i = int(idx)
           requestDetails(
             idx,
-            getName(appState.soa, appState.textArena, i),
-            getRepo(
-              appState.soa, appState.repoOffsets, appState.repoLens, appState.repoArena, i
-            ),
+            copyName(view, i),
+            copyRepo(view, i),
             appState.dataSource,
           )
 
@@ -170,14 +154,8 @@ proc main() =
               let i = int(pIdx)
               requestDetails(
                 pIdx,
-                getName(appState.soa, appState.textArena, i),
-                getRepo(
-                  appState.soa,
-                  appState.repoOffsets,
-                  appState.repoLens,
-                  appState.repoArena,
-                  i,
-                ),
+                copyName(view, i),
+                copyRepo(view, i),
                 appState.dataSource,
               )
 

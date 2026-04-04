@@ -8,6 +8,7 @@ type
     ReqLoadAur
     ReqSearch
     ReqDetails
+    ReqDiagnostics
     ReqStop
 
   WorkerReq* = object

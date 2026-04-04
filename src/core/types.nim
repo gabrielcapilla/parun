@@ -7,6 +7,8 @@
 ## 3. **Arenas:** Using contiguous buffers for strings to avoid fragmentation and GC.
 
 import std/[tables, monotimes, strutils]
+import ../utils/memory_accounting
+import ../pkgs/indexes
 
 const
   ## Max number of package details cached in RAM.
@@ -80,12 +82,18 @@ type
     ## Nimble ecosystem.
     SourceNimble
 
+  SourceSlot* = enum
+    SlotSystem
+    SlotAur
+    SlotNimble
+
   MsgKind* = enum
     ## Message types for the Actor system (Threading).
     MsgInput
     MsgTick
     MsgSearchResults
     MsgDetailsLoaded
+    MsgWorkerDiagnostics
     MsgError
 
   PackageHot* = object
@@ -216,6 +224,8 @@ type
       pkgIdx*: int32
       ## Formatted details text.
       content*: string
+    of MsgWorkerDiagnostics:
+      workerReport*: WorkerMemoryReport
     of MsgError:
       errMsg*: string
 
@@ -258,6 +268,8 @@ type
     aurDB*: PackageDB
     ## Nimble packages cache.
     nimbleDB*: PackageDB
+    ## Immutable, mmapped source indexes keyed by runtime source slot.
+    sourceViews*: array[SourceSlot, SourceIndexView]
 
     # Search and UI State
     #
@@ -303,6 +315,7 @@ type
     ## Mode to return to after exiting AUR/Nimble.
     baseSearchMode*: SearchMode
     baseDataSource*: DataSource
+    activeSlot*: SourceSlot
     lastDetailIdx*: int32
 
     # Packed flags
@@ -339,3 +352,19 @@ func getEffectiveQuery*(buffer: string): string {.noSideEffect.} =
   if buffer.startsWith("i/"):
     return buffer[2 ..^ 1]
   return buffer
+
+proc slotToIndexKind*(slot: SourceSlot): IndexedSourceKind {.inline.} =
+  case slot
+  of SlotSystem:
+    iskSystem
+  of SlotAur:
+    iskAur
+  of SlotNimble:
+    iskNimble
+
+proc sourceSlot*(source: DataSource, mode: SearchMode): SourceSlot {.inline.} =
+  case source
+  of SourceNimble:
+    SlotNimble
+  of SourceSystem:
+    if mode == ModeAUR: SlotAur else: SlotSystem

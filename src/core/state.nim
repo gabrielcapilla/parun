@@ -4,6 +4,8 @@
 
 import std/[tables, math, monotimes, bitops]
 import types
+import ../pkgs/[index_builder, indexes]
+import systems/search_system
 
 proc appendFromArena*(
     textArena: openArray[char], offset, len: int, buffer: var string, maxLen: int = -1
@@ -143,68 +145,82 @@ func getSelectedCount*(selectionBits: openArray[uint64]): int {.noSideEffect.} =
   for word in selectionBits:
     result += countSetBits(word)
 
-proc saveCurrentToDB*(state: var AppState) =
-  let db =
-    case state.dataSource
-    of SourceSystem:
-      (if state.searchMode == ModeLocal: addr state.systemDB
-      else: addr state.aurDB)
-    of SourceNimble:
-      addr state.nimbleDB
-  db[].soa = state.soa
-  db[].textArena = state.textArena
-  db[].repos = state.repos
-  db[].repoArena = state.repoArena
-  db[].repoLens = state.repoLens
-  db[].repoOffsets = state.repoOffsets
-  db[].isLoaded = true
+proc slotForIndexKind(kind: IndexedSourceKind): SourceSlot =
+  case kind
+  of iskSystem:
+    SlotSystem
+  of iskAur:
+    SlotAur
+  of iskNimble:
+    SlotNimble
 
-proc loadFromDB*(state: var AppState, source: DataSource) =
-  let db =
-    if source == SourceSystem:
-      (if state.searchMode == ModeLocal: addr state.systemDB
-      else: addr state.aurDB)
+proc activeView*(state: var AppState): ptr SourceIndexView {.inline.} =
+  addr state.sourceViews[state.activeSlot]
+
+proc currentPackageCount*(state: var AppState): int {.inline.} =
+  packageCount(state.activeView)
+
+proc rebuildVisible*(state: var AppState) =
+  if state.viewingSelection:
+    filterBySelection(
+      state.selectionBits, state.currentPackageCount(), state.visibleIndices
+    )
+  else:
+    filterIndices(state.searchBuffer, state.activeView, state.visibleIndices)
+
+proc syncSelectionCapacity(state: var AppState) =
+  let requiredWords = (state.currentPackageCount() + 63) div 64
+  if state.selectionBits.len > requiredWords:
+    state.selectionBits.setLen(requiredWords)
+
+proc activateCurrentSource*(state: var AppState) =
+  state.activeSlot = sourceSlot(state.dataSource, state.searchMode)
+  state.syncSelectionCapacity()
+
+proc closeIndexedSources*(state: var AppState) =
+  for slot in SourceSlot:
+    state.sourceViews[slot].close()
+
+proc prepareIndexedSources*(state: var AppState, indexDir: string = "") =
+  let runtimeDir =
+    if indexDir.len > 0:
+      indexDir
     else:
-      addr state.nimbleDB
-  state.soa = db[].soa
-  state.textArena = db[].textArena
-  state.repos = db[].repos
-  state.repoArena = db[].repoArena
-  state.repoLens = db[].repoLens
-  state.repoOffsets = db[].repoOffsets
+      defaultRuntimeIndexDir()
+  let validated = ensureRuntimeIndexes(runtimeDir)
+  for slot in SourceSlot:
+    state.sourceViews[slot].close()
+  for item in validated:
+    let slot = slotForIndexKind(item.source)
+    state.sourceViews[slot] = openValidatedSourceIndex(item)
+    prefaultHotSections(addr state.sourceViews[slot])
+  state.activateCurrentSource()
+  state.rebuildVisible()
 
 proc switchToNimble*(state: var AppState) =
   if state.dataSource != SourceNimble:
     state.visibleIndices.setLen(0)
     state.detailsCache.clear()
-    saveCurrentToDB(state)
     state.dataSource = SourceNimble
     state.searchId.inc()
     state.cursor = 0
     state.scroll = 0
     state.selectionBits.setLen(0)
-    loadFromDB(state, SourceNimble)
-    if not state.nimbleDB.isLoaded:
-      requestLoadNimble(state.searchId)
+    state.activateCurrentSource()
+    state.rebuildVisible()
 
 proc switchToSystem*(state: var AppState, mode: SearchMode) =
   if state.dataSource != SourceSystem or state.searchMode != mode:
     state.visibleIndices.setLen(0)
     state.detailsCache.clear()
-    saveCurrentToDB(state)
     state.dataSource = SourceSystem
     state.searchMode = mode
     state.searchId.inc()
     state.cursor = 0
     state.scroll = 0
     state.selectionBits.setLen(0)
-    loadFromDB(state, SourceSystem)
-    if mode == ModeLocal:
-      if not state.systemDB.isLoaded:
-        requestLoadAll(state.searchId)
-    else:
-      if not state.aurDB.isLoaded:
-        requestLoadAur(state.searchId)
+    state.activateCurrentSource()
+    state.rebuildVisible()
 
 proc restoreBaseState*(state: var AppState) =
   if state.baseDataSource == SourceNimble:
@@ -279,6 +295,8 @@ proc newState*(
     systemDB: initPackageDB(),
     aurDB: initPackageDB(),
     nimbleDB: initPackageDB(),
+    sourceViews: default(array[SourceSlot, SourceIndexView]),
+    activeSlot: sourceSlot(ds, initialMode),
     visibleIndices: @[],
     selectionBits: @[],
     detailsCache: initTable[int32, string](),
