@@ -125,7 +125,7 @@ proc waitForQuiet(
 ): int =
   let started = getMonoTime()
   var lastRead = started
-  var sawOutput = false
+  var sawOutput = buffer.len > 0
   result = -1
 
   while true:

@@ -16,6 +16,7 @@ type
     searchId*: int
     pkgIdx*: int32
     source*: DataSource
+    pkgSlot*: SourceSlot
     targetSource*: DataSource
     targetMode*: SearchMode
     kind*: WorkerReqKind

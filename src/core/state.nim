@@ -201,6 +201,8 @@ proc switchToNimble*(state: var AppState) =
   if state.dataSource != SourceNimble:
     state.visibleIndices.setLen(0)
     state.detailsCache.clear()
+    state.pendingDetailIdx = -1
+    state.detailRequestInFlight = false
     state.dataSource = SourceNimble
     state.searchId.inc()
     state.cursor = 0
@@ -213,6 +215,8 @@ proc switchToSystem*(state: var AppState, mode: SearchMode) =
   if state.dataSource != SourceSystem or state.searchMode != mode:
     state.visibleIndices.setLen(0)
     state.detailsCache.clear()
+    state.pendingDetailIdx = -1
+    state.detailRequestInFlight = false
     state.dataSource = SourceSystem
     state.searchMode = mode
     state.searchId.inc()
@@ -313,11 +317,16 @@ proc newState*(
     searchId: 1,
     dataSearchId: 0,
     lastInputTime: getMonoTime(),
+    detailTargetSince: getMonoTime(),
     debouncePending: false,
     statusMessage: "",
     showDetails: initialShowDetails,
     needsRedraw: true,
     detailScroll: 0,
+    lastDetailIdx: -1,
+    pendingDetailIdx: -1,
+    pendingDetailSlot: sourceSlot(ds, initialMode),
+    detailRequestInFlight: false,
     stringArena: initStringArena(64 * 1024),
   )
 

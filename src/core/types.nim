@@ -12,7 +12,11 @@ import ../pkgs/indexes
 
 const
   ## Max number of package details cached in RAM.
-  DetailsCacheLimit* = 256
+  DetailsCacheLimit* = 64
+  ## Approximate UI-side byte budget for cached detail text.
+  DetailsCacheByteBudget* = 512 * 1024
+  ## Delay before requesting details for a newly focused package.
+  DetailsRequestDebounceMs* = 120
   ## Buffer size for thread communication batches.
   # BatchSize moved to worker_types.nim
 
@@ -130,7 +134,7 @@ type
   RequestLoadProc* = proc(id: int) {.gcsafe.}
   RequestSearchProc* = proc(query: string, id: int) {.gcsafe.}
   RequestDetailsProc* = proc(
-      idx: int32, name, repo: string, source: DataSource
+      idx: int32, name, repo: string, source: DataSource, slot: SourceSlot
   ) {.gcsafe.}
 
 var
@@ -168,9 +172,11 @@ proc requestSearch*(query: string, id: int) {.inline.} =
   if requestSearchImpl != nil:
     requestSearchImpl(query, id)
 
-proc requestDetails*(idx: int32, name, repo: string, source: DataSource) {.inline.} =
+proc requestDetails*(
+    idx: int32, name, repo: string, source: DataSource, slot: SourceSlot
+) {.inline.} =
   if requestDetailsImpl != nil:
-    requestDetailsImpl(idx, name, repo, source)
+    requestDetailsImpl(idx, name, repo, source, slot)
 
 type
   StringArenaHandle* = object
@@ -222,6 +228,8 @@ type
     of MsgDetailsLoaded:
       ## Requested package index.
       pkgIdx*: int32
+      ## Source slot associated with the request.
+      pkgSlot*: SourceSlot
       ## Formatted details text.
       content*: string
     of MsgWorkerDiagnostics:
@@ -299,6 +307,7 @@ type
     lastDetailWidth*: int
     ## For debouncing.
     lastInputTime*: MonoTime
+    detailTargetSince*: MonoTime
 
     statusMessage*: string
 
@@ -317,6 +326,9 @@ type
     baseDataSource*: DataSource
     activeSlot*: SourceSlot
     lastDetailIdx*: int32
+    pendingDetailIdx*: int32
+    pendingDetailSlot*: SourceSlot
+    detailRequestInFlight*: bool
 
     # Packed flags
     ## Filter: View only selected?

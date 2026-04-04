@@ -99,11 +99,18 @@ proc enqueueSearch(query: string, id: int) {.gcsafe.} =
   ensureWorkerRunning()
   reqChan.send(WorkerReq(kind: ReqSearch, query: query, searchId: id))
 
-proc enqueueDetails(idx: int32, name, repo: string, source: DataSource) {.gcsafe.} =
+proc enqueueDetails(
+    idx: int32, name, repo: string, source: DataSource, slot: SourceSlot
+) {.gcsafe.} =
   ensureWorkerRunning()
   reqChan.send(
     WorkerReq(
-      kind: ReqDetails, pkgIdx: idx, pkgName: name, pkgRepo: repo, source: source
+      kind: ReqDetails,
+      pkgIdx: idx,
+      pkgName: name,
+      pkgRepo: repo,
+      source: source,
+      pkgSlot: slot,
     )
   )
 

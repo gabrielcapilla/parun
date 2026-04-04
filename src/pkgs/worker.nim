@@ -27,19 +27,20 @@ proc downloadWithRetry*(client: HttpClient, url: string, maxRetries: int = 3): s
   )
 
 proc addToDetailsCache(
-    cache: var Table[string, string], key, value: string, maxSize: int
+    cache: var Table[string, string],
+    cacheBytes: var int,
+    key, value: string,
+    maxEntries: int,
+    maxBytes: int,
 ) =
-  ## Adds item to cache with LRU-style eviction when limit reached
-  if cache.len >= maxSize:
-    # Simple eviction: clear half the cache when full
-    var count = 0
-    for k in cache.keys:
-      if count < maxSize div 2:
-        cache.del(k)
-        count += 1
-      else:
-        break
+  ## Adds item to cache with explicit byte and entry budgets.
+  if cache.hasKey(key):
+    cacheBytes = max(0, cacheBytes - cache[key].len)
+  if cache.len >= maxEntries or cacheBytes + value.len > maxBytes:
+    cache.clear()
+    cacheBytes = 0
   cache[key] = value
+  cacheBytes += value.len
 
 type
   ExecResult = tuple[output: string, success: bool]
@@ -102,7 +103,9 @@ proc workerLoop*(
   var hasReq = false
   var nimbleMetaCache = initTable[string, NimbleMeta]()
   var detailsCache = initTable[string, string]() # Worker-side persistent cache
-  const MaxDetailsCacheSize = 512 # Prevent memory leak in long sessions
+  var detailsCacheBytes = 0
+  const MaxDetailsCacheSize = 128
+  const MaxDetailsCacheBytes = 1024 * 1024
   # HTTP client with default SSL certificate validation
   # Note: Nim's httpclient validates certificates by default
   var client = newHttpClient(timeout = 3000)
@@ -326,11 +329,11 @@ proc workerLoop*(
       of ReqDetails:
         detailBatch.setLen(0)
         detailBatch.add(req)
-        while detailBatch.len < 16:
+        while true:
           let (ok, nextReq) = reqChan.tryRecv()
           if ok:
             if nextReq.kind == ReqDetails:
-              detailBatch.add(nextReq)
+              detailBatch[0] = nextReq
             else:
               currentReq = nextReq
               hasReq = true
@@ -340,7 +343,7 @@ proc workerLoop*(
 
         for r in detailBatch:
           var cacheKey = newStringOfCap(r.pkgRepo.len + r.pkgName.len + 16)
-          cacheKey.add($r.source)
+          cacheKey.add($r.pkgSlot)
           cacheKey.add(':')
           cacheKey.add(r.pkgRepo)
           cacheKey.add(':')
@@ -351,6 +354,7 @@ proc workerLoop*(
               Msg(
                 kind: MsgDetailsLoaded,
                 pkgIdx: r.pkgIdx,
+                pkgSlot: r.pkgSlot,
                 content: detailsCache[cacheKey],
               )
             )
@@ -397,15 +401,41 @@ proc workerLoop*(
                     break
 
             if fetched:
-              addToDetailsCache(detailsCache, cacheKey, content, MaxDetailsCacheSize)
+              addToDetailsCache(
+                detailsCache,
+                detailsCacheBytes,
+                cacheKey,
+                content,
+                MaxDetailsCacheSize,
+                MaxDetailsCacheBytes,
+              )
               resChan.send(
-                Msg(kind: MsgDetailsLoaded, pkgIdx: r.pkgIdx, content: content)
+                Msg(
+                  kind: MsgDetailsLoaded,
+                  pkgIdx: r.pkgIdx,
+                  pkgSlot: r.pkgSlot,
+                  content: content,
+                )
               )
             else:
               let (c, _) = execWithErrorCheck("nimble search " & r.pkgName, emLenient)
               let info = formatFallbackInfo(c)
-              addToDetailsCache(detailsCache, cacheKey, info, MaxDetailsCacheSize)
-              resChan.send(Msg(kind: MsgDetailsLoaded, pkgIdx: r.pkgIdx, content: info))
+              addToDetailsCache(
+                detailsCache,
+                detailsCacheBytes,
+                cacheKey,
+                info,
+                MaxDetailsCacheSize,
+                MaxDetailsCacheBytes,
+              )
+              resChan.send(
+                Msg(
+                  kind: MsgDetailsLoaded,
+                  pkgIdx: r.pkgIdx,
+                  pkgSlot: r.pkgSlot,
+                  content: info,
+                )
+              )
           else:
             let target =
               if r.pkgRepo == "local":
@@ -428,7 +458,21 @@ proc workerLoop*(
                 )
               )
               continue
-            addToDetailsCache(detailsCache, cacheKey, c, MaxDetailsCacheSize)
-            resChan.send(Msg(kind: MsgDetailsLoaded, pkgIdx: r.pkgIdx, content: c))
+            addToDetailsCache(
+              detailsCache,
+              detailsCacheBytes,
+              cacheKey,
+              c,
+              MaxDetailsCacheSize,
+              MaxDetailsCacheBytes,
+            )
+            resChan.send(
+              Msg(
+                kind: MsgDetailsLoaded,
+                pkgIdx: r.pkgIdx,
+                pkgSlot: r.pkgSlot,
+                content: c,
+              )
+            )
     except Exception as e:
       resChan.send(Msg(kind: MsgError, errMsg: e.msg))

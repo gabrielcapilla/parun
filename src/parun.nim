@@ -1,6 +1,6 @@
 ## Initializes the terminal, package manager, and main event loop.
 
-import std/[posix, tables, terminal, selectors, strutils, parseopt, bitops]
+import std/[posix, tables, terminal, selectors, strutils, parseopt, bitops, monotimes, times]
 import ui/[tui, keyboard, terminal as term]
 import core/[types, state, engine]
 import pkgs/[indexes, manager]
@@ -130,34 +130,34 @@ proc main() =
         # Terminal will redraw on next iteration
         discard
 
-      # Lazy details loading with speculative pre-fetching (Zero Latency)
-      if appState.showDetails and appState.visibleIndices.len > 0:
-        let view = appState.activeView
-        let currentCursor = appState.cursor
-        # Priority: Current element
-        let idx = appState.visibleIndices[currentCursor]
-        if not appState.detailsCache.hasKey(idx):
+    # Request details only for the stable current selection.
+    if appState.showDetails and appState.visibleIndices.len > 0:
+      let view = appState.activeView
+      let idx = appState.visibleIndices[appState.cursor]
+      if not appState.detailsCache.hasKey(idx):
+        if appState.pendingDetailIdx != idx or appState.pendingDetailSlot != appState.activeSlot:
+          appState.pendingDetailIdx = idx
+          appState.pendingDetailSlot = appState.activeSlot
+          appState.detailTargetSince = getMonoTime()
+          appState.detailRequestInFlight = false
+        elif not appState.detailRequestInFlight and
+            (getMonoTime() - appState.detailTargetSince).inMilliseconds() >=
+            DetailsRequestDebounceMs and appState.pendingDetailIdx == idx:
           let i = int(idx)
           requestDetails(
             idx,
             copyName(view, i),
             copyRepo(view, i),
             appState.dataSource,
+            appState.activeSlot,
           )
-
-        # Speculative: Prefetch 3 ahead and 2 behind
-        for offset in [1, 2, 3, -1, -2]:
-          let preIdx = currentCursor + offset
-          if preIdx >= 0 and preIdx < appState.visibleIndices.len:
-            let pIdx = appState.visibleIndices[preIdx]
-            if not appState.detailsCache.hasKey(pIdx):
-              let i = int(pIdx)
-              requestDetails(
-                pIdx,
-                copyName(view, i),
-                copyRepo(view, i),
-                appState.dataSource,
-              )
+          appState.detailRequestInFlight = true
+      else:
+        appState.pendingDetailIdx = -1
+        appState.detailRequestInFlight = false
+    else:
+      appState.pendingDetailIdx = -1
+      appState.detailRequestInFlight = false
 
     # Event Waiting (Input or Resize)
     let ready = selector.select(16)
