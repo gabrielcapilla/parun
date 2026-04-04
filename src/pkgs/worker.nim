@@ -17,7 +17,7 @@ proc downloadWithRetry*(client: HttpClient, url: string, maxRetries: int = 3): s
     except Exception as e:
       lastError = e.msg
       if i < maxRetries - 1:
-        let delay = 1000 * (i + 1) # Exponential backoff: 1s, 2s, 3s
+        let delay = 1000 * (1 shl i) # Exponential backoff: 1s, 2s, 4s
         sleep(delay)
   # All retries failed
   raise newException(
@@ -179,10 +179,12 @@ proc workerLoop*(
         let (listOut, listSuccess) =
           execWithErrorCheck("nimble list -i --noColor", emLenient)
         if listSuccess:
-          for line in listOut.splitLines:
-            let parts = line.split(' ')
-            if parts.len > 0:
-              installedSet.incl(parts[0])
+          for line in listOut.split('\n'):
+            if line.len == 0: continue
+            for part in line.split(' '):
+              if part.len > 0:
+                installedSet.incl(part)
+                break
 
         var nimbleCache = initNimbleCache()
         if not safeLoadOrRefreshCache(nimbleCache, keepJson = true):
@@ -264,7 +266,7 @@ proc workerLoop*(
         let (outp, _) =
           execWithErrorCheck(toolDef.bin & toolDef.searchCmd & req.query, emLenient)
         var bb = initBatchBuilder(SourceSystem, ModeLocal)
-        for line in outp.splitLines:
+        for line in outp.split('\n'):
           if line.len == 0:
             continue
           var i = 0
@@ -284,7 +286,8 @@ proc workerLoop*(
           addPackage(bb, name, ver, repo, globalInstMap.hasKey(name))
         bb.flushBatch(resChan, req.searchId, tStart)
       of ReqDetails:
-        var batch = @[req]
+        var batch = newSeqOfCap[WorkerReq](16)
+        batch.add(req)
         while batch.len < 16:
           let (ok, nextReq) = reqChan.tryRecv()
           if ok:
@@ -298,7 +301,13 @@ proc workerLoop*(
             break
 
         for r in batch:
-          let cacheKey = $r.source & ":" & r.pkgRepo & ":" & r.pkgName
+          var cacheKey = newStringOfCap(r.pkgRepo.len + r.pkgName.len + 16)
+          cacheKey.add($r.source)
+          cacheKey.add(':')
+          cacheKey.add(r.pkgRepo)
+          cacheKey.add(':')
+          cacheKey.add(r.pkgName)
+
           if detailsCache.hasKey(cacheKey):
             resChan.send(
               Msg(
@@ -316,9 +325,11 @@ proc workerLoop*(
               let meta = nimbleMetaCache[r.pkgName]
               let rawBase = getRawBaseUrl(meta.url)
               if rawBase.len > 0:
-                var names = @[r.pkgName]
-                if r.pkgName != r.pkgName.toLowerAscii():
-                  names.add(r.pkgName.toLowerAscii())
+                let lowerName = r.pkgName.toLowerAscii()
+                var names = newSeqOfCap[string](2)
+                names.add(r.pkgName)
+                if r.pkgName != lowerName:
+                  names.add(lowerName)
                 for branch in ["master", "main"]:
                   for nameVariant in names:
                     try:
@@ -334,7 +345,7 @@ proc workerLoop*(
                       )
                       fetched = true
                       break
-                    except:
+                    except CatchableError:
                       continue
                   if fetched:
                     break
@@ -356,12 +367,14 @@ proc workerLoop*(
               else:
                 r.pkgRepo & "/" & r.pkgName
             let bin = if r.pkgRepo == "local": "pacman" else: toolDef.bin
-            let args =
-              if r.pkgRepo == "local":
-                @["-Qi", target]
-              else:
-                @["-Si", target]
-            let (c, ok) = execWithErrorCheck(bin & " " & args.join(" "), emStrict)
+            var cmd = newStringOfCap(bin.len + target.len + 8)
+            cmd.add(bin)
+            if r.pkgRepo == "local":
+              cmd.add(" -Qi ")
+            else:
+              cmd.add(" -Si ")
+            cmd.add(target)
+            let (c, ok) = execWithErrorCheck(cmd, emStrict)
             if not ok:
               resChan.send(
                 Msg(

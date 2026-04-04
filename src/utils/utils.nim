@@ -3,18 +3,18 @@ import std/[unicode, strutils]
 func wrapText*(text: string, maxWidth: int): seq[string] {.noSideEffect.} =
   ## Wraps text to fit within maxWidth characters.
   ## Preserves existing newlines and handles word boundaries.
-  result = @[]
-  for line in text.splitLines():
+  result = newSeqOfCap[string](text.len div (maxWidth + 1) + 1)
+  for line in text.split('\n'):
     if line.len <= maxWidth:
       result.add(line)
       continue
 
     # Need to wrap this line
-    var currentLine = ""
+    var currentLine = newStringOfCap(maxWidth)
     var currentLen = 0
-    var words = line.split(' ')
 
-    for word in words:
+    for word in line.split(' '):
+      if word.len == 0: continue
       let wordWithSpace =
         if currentLen > 0:
           " " & word
@@ -78,7 +78,7 @@ proc visibleWidth*(s: string): int =
 proc truncate*(s: string, maxW: int): string =
   var i = 0
   var w = 0
-  result = ""
+  result = newStringOfCap(s.len)
   while i < s.len and w < maxW:
     if s[i] == '\e':
       let start = i

@@ -26,13 +26,16 @@ func parseNimbleInfo*(
     raw, name, url: string, tags: seq[string]
 ): string {.noSideEffect.} =
   var info = initTable[string, string]()
-  var requires: seq[string] = @[]
+  var requires = newSeqOfCap[string](16)
 
-  for line in raw.splitLines():
-    let l = line.strip()
-    if l.len == 0 or l.startsWith("#"):
+  for line in raw.split('\n'):
+    # Efficiently skip empty lines or comments without allocation
+    var first = 0
+    while first < line.len and line[first] in {' ', '\t', '\r'}: inc first
+    if first == line.len or line[first] == '#':
       continue
 
+    let l = line.strip()
     let lowerL = l.toLowerAscii()
     if lowerL.startsWith("requires"):
       var rest =
@@ -43,9 +46,15 @@ func parseNimbleInfo*(
       if rest.startsWith("(") and rest.endsWith(")"):
         rest = rest[1 ..^ 2]
       for part in rest.split(','):
-        let dep = part.strip().strip(chars = {'"'})
+        let dep = part.strip()
         if dep.len > 0:
-          requires.add(dep)
+          # Optimization: check if it starts/ends with " before stripping to avoid extra allocation
+          let cleanDep = if dep.startsWith('"') and dep.endsWith('"') and dep.len >= 2:
+                           dep[1 ..^ 2]
+                         else:
+                           dep
+          if cleanDep.len > 0:
+            requires.add(cleanDep)
     elif '=' in l:
       let parts = l.split('=', 1)
       let key = parts[0].strip().toLowerAscii()
@@ -81,9 +90,12 @@ func parseNimbleInfo*(
 
 func formatFallbackInfo*(raw: string): string {.noSideEffect.} =
   var info = initTable[string, string]()
-  for line in raw.splitLines():
-    if line.strip().len == 0:
+  for line in raw.split('\n'):
+    var first = 0
+    while first < line.len and line[first] in {' ', '\t', '\r'}: inc first
+    if first == line.len:
       continue
+
     if not line.startsWith(" ") and line.endsWith(":"):
       info["Name"] = line[0 ..^ 2]
     else:

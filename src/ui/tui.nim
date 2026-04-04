@@ -1,6 +1,6 @@
 ## Main UI orchestration.
 
-import std/[strformat, strutils]
+import std/[strformat]
 import ../core/[types, state]
 import renderer
 
@@ -125,6 +125,9 @@ proc renderUi*(
       renderDetails(buffer, state, r, listH, detailTextW)
     buffer.add("\n")
 
-  buffer.add(ColorFrame & repeat(BoxHor, termW) & Reset & "\n")
+  buffer.add(ColorFrame)
+  for _ in 0 ..< termW:
+    buffer.add(BoxHor)
+  buffer.add(Reset & "\n")
   let cx = renderStatusBar(buffer, state, termW)
   return (cx, termH)

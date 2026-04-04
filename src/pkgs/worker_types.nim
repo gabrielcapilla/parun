@@ -47,15 +47,15 @@ const BatchSize* = 64 * 1024
 func initBatchBuilder*(source: DataSource, mode: SearchMode): BatchBuilder =
   result.source = source
   result.mode = mode
-  result.soa.hot.locators = newSeqOfCap[uint32](1000)
-  result.soa.hot.nameLens = newSeqOfCap[uint8](1000)
-  result.soa.hot.flags = newSeqOfCap[uint8](1000)
-  result.soa.cold.verLens = newSeqOfCap[uint8](1000)
-  result.soa.cold.repoIndices = newSeqOfCap[uint8](1000)
+  result.soa.hot.locators = newSeqOfCap[uint32](5000)
+  result.soa.hot.nameLens = newSeqOfCap[uint8](5000)
+  result.soa.hot.flags = newSeqOfCap[uint8](5000)
+  result.soa.cold.verLens = newSeqOfCap[uint8](5000)
+  result.soa.cold.repoIndices = newSeqOfCap[uint8](5000)
 
   result.textChunk = newStringOfCap(BatchSize)
-  result.repos = @[]
-  result.repoMap = initTable[string, uint8]()
+  result.repos = newSeqOfCap[string](16)
+  result.repoMap = initTable[string, uint8](16)
 
 proc flushBatch*(
     bb: var BatchBuilder,

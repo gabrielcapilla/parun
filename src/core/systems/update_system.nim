@@ -1,10 +1,11 @@
-import std/[tables, monotimes, math, times]
+import std/[tables, monotimes, times]
 import ../types, search_system, navigation_system, input_system
 import ../../pkgs/manager
 
 proc appendBatch*(db: var PackageDB, msg: Msg) =
+  let batchLen = msg.soa.hot.locators.len
   var repoMap = newSeq[uint8](msg.repos.len)
-  var dbRepoLookup = initTable[string, uint8]()
+  var dbRepoLookup = initTable[string, uint8](db.repos.len + msg.repos.len)
   for i, r in db.repos:
     dbRepoLookup[r] = uint8(i)
 
@@ -17,24 +18,34 @@ proc appendBatch*(db: var PackageDB, msg: Msg) =
       let offset = uint16(db.repoArena.len)
       db.repoOffsets.add(offset)
       db.repoLens.add(uint8(r.len))
-      for c in r:
-        db.repoArena.add(c)
+      let oldLen = db.repoArena.len
+      db.repoArena.setLen(oldLen + r.len)
+      if r.len > 0:
+        copyMem(addr db.repoArena[oldLen], unsafeAddr r[0], r.len)
       repoMap[i] = rIdx
       dbRepoLookup[r] = rIdx
 
   let textBase = uint32(db.textArena.len)
-  for i in 0 ..< msg.soa.hot.locators.len:
-    db.soa.hot.locators.add(textBase + msg.soa.hot.locators[i])
-    db.soa.hot.nameLens.add(msg.soa.hot.nameLens[i])
-    db.soa.hot.flags.add(msg.soa.hot.flags[i])
-    db.soa.cold.verLens.add(msg.soa.cold.verLens[i])
+  db.soa.hot.locators.setLen(db.soa.hot.locators.len + batchLen)
+  db.soa.hot.nameLens.setLen(db.soa.hot.nameLens.len + batchLen)
+  db.soa.hot.flags.setLen(db.soa.hot.flags.len + batchLen)
+  db.soa.cold.verLens.setLen(db.soa.cold.verLens.len + batchLen)
+  db.soa.cold.repoIndices.setLen(db.soa.cold.repoIndices.len + batchLen)
+
+  let oldLen = db.soa.hot.locators.len - batchLen
+  for i in 0 ..< batchLen:
+    db.soa.hot.locators[oldLen + i] = textBase + msg.soa.hot.locators[i]
+    db.soa.hot.nameLens[oldLen + i] = msg.soa.hot.nameLens[i]
+    db.soa.hot.flags[oldLen + i] = msg.soa.hot.flags[i]
+    db.soa.cold.verLens[oldLen + i] = msg.soa.cold.verLens[i]
     let batchRIdx = msg.soa.cold.repoIndices[i]
     if batchRIdx < repoMap.len.uint8:
-      db.soa.cold.repoIndices.add(repoMap[batchRIdx])
+      db.soa.cold.repoIndices[oldLen + i] = repoMap[batchRIdx]
     else:
-      db.soa.cold.repoIndices.add(0)
+      db.soa.cold.repoIndices[oldLen + i] = 0
 
-  db.textArena.add(msg.textChunk)
+  for c in msg.textChunk:
+    db.textArena.add(c)
 
 proc handleSearchResults*(state: var AppState, msg: Msg, listHeight: int) =
   let isBackground =
@@ -71,7 +82,7 @@ proc handleSearchResults*(state: var AppState, msg: Msg, listHeight: int) =
       state.dataSearchId = msg.searchId
 
     var repoMap = newSeq[uint8](msg.repos.len)
-    var repoLookup = initTable[string, uint8]()
+    var repoLookup = initTable[string, uint8](state.repos.len + msg.repos.len)
     for i, r in state.repos:
       repoLookup[r] = uint8(i)
 
@@ -85,20 +96,30 @@ proc handleSearchResults*(state: var AppState, msg: Msg, listHeight: int) =
         state.repoOffsets.add(uint16(state.repoArena.len))
         state.repos.add(r)
         state.repoLens.add(uint8(r.len))
-        for c in r:
-          state.repoArena.add(c)
+        let oldLen = state.repoArena.len
+        state.repoArena.setLen(oldLen + r.len)
+        if r.len > 0:
+          copyMem(addr state.repoArena[oldLen], unsafeAddr r[0], r.len)
 
     let baseOffset = uint32(state.textArena.len)
     for c in msg.textChunk:
       state.textArena.add(c)
 
-    for i in 0 ..< msg.soa.hot.locators.len:
+    let batchLen = msg.soa.hot.locators.len
+    let oldLen = state.soa.hot.locators.len
+    state.soa.hot.locators.setLen(oldLen + batchLen)
+    state.soa.hot.nameLens.setLen(oldLen + batchLen)
+    state.soa.hot.flags.setLen(oldLen + batchLen)
+    state.soa.cold.verLens.setLen(oldLen + batchLen)
+    state.soa.cold.repoIndices.setLen(oldLen + batchLen)
+
+    for i in 0 ..< batchLen:
       let absLoc = baseOffset + msg.soa.hot.locators[i]
-      state.soa.hot.locators.add(absLoc)
-      state.soa.hot.nameLens.add(msg.soa.hot.nameLens[i])
-      state.soa.hot.flags.add(msg.soa.hot.flags[i])
-      state.soa.cold.verLens.add(msg.soa.cold.verLens[i])
-      state.soa.cold.repoIndices.add(repoMap[msg.soa.cold.repoIndices[i]])
+      state.soa.hot.locators[oldLen + i] = absLoc
+      state.soa.hot.nameLens[oldLen + i] = msg.soa.hot.nameLens[i]
+      state.soa.hot.flags[oldLen + i] = msg.soa.hot.flags[i]
+      state.soa.cold.verLens[oldLen + i] = msg.soa.cold.verLens[i]
+      state.soa.cold.repoIndices[oldLen + i] = repoMap[msg.soa.cold.repoIndices[i]]
 
     let requiredWords = (state.soa.hot.locators.len + 63) div 64
     if state.selectionBits.len < requiredWords:

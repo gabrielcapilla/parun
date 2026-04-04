@@ -70,8 +70,8 @@ proc main() =
 
     # Install/Uninstall Management
     if appState.shouldInstall or appState.shouldUninstall:
-      var targets: seq[string] = @[]
       let selCount = appState.getSelectedCount()
+      var targets: seq[string] = newSeqOfCap[string](selCount + 1)
       let totalPkgs = appState.soa.hot.locators.len
 
       if selCount > 0:
@@ -82,34 +82,24 @@ proc main() =
             if testBit(word, bit):
               let realIdx = i * 64 + bit
               if realIdx < totalPkgs:
-                let s =
-                  if appState.dataSource == SourceNimble:
-                    appState.getName(realIdx)
-                  else:
-                    appState.getRepo(realIdx) & "/" & appState.getName(realIdx)
-
+                let name = appState.getName(realIdx)
                 if appState.shouldInstall:
                   if appState.dataSource == SourceNimble:
-                    if s.contains('/'):
-                      targets.add(s.split('/')[1])
-                    else:
-                      targets.add(s)
+                    targets.add(name)
                   else:
-                    targets.add(s)
+                    targets.add(appState.getRepo(realIdx) & "/" & name)
                 else:
-                  if s.contains('/'):
-                    targets.add(s.split('/')[1])
-                  else:
-                    targets.add(s)
+                  targets.add(name)
       elif appState.visibleIndices.len > 0:
         let idx = int(appState.visibleIndices[appState.cursor])
+        let name = appState.getName(idx)
         if appState.shouldInstall:
           if appState.dataSource == SourceNimble:
-            targets.add(appState.getName(idx))
+            targets.add(name)
           else:
-            targets.add(appState.getRepo(idx) & "/" & appState.getName(idx))
+            targets.add(appState.getRepo(idx) & "/" & name)
         else:
-          targets.add(appState.getName(idx))
+          targets.add(name)
 
       if targets.len > 0:
         restoreTerminal(origTerm)

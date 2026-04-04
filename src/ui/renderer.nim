@@ -31,8 +31,8 @@ proc appendSpaces*(buffer: var string, count: int) =
   while p >= 50:
     buffer.add(Spaces50)
     p -= 50
-  if p > 0:
-    buffer.add(Spaces50[0 ..< p])
+  for _ in 0 ..< p:
+    buffer.add(' ')
 
 proc appendRow*(
     buffer: var string,
@@ -127,15 +127,23 @@ proc renderDetails*(
 ) =
   ## Renders the side details panel with dynamic text wrapping.
   if r == 0:
-    buffer.add(
-      ColorFrame & BoxTopLeft & repeat(BoxHor, detailTextW) & BoxTopRight & Reset
-    )
+    buffer.add(ColorFrame)
+    buffer.add(BoxTopLeft)
+    for _ in 0 ..< detailTextW:
+      buffer.add(BoxHor)
+    buffer.add(BoxTopRight)
+    buffer.add(Reset)
   elif r == listH - 1:
-    buffer.add(
-      ColorFrame & BoxBottomLeft & repeat(BoxHor, detailTextW) & BoxBottomRight & Reset
-    )
+    buffer.add(ColorFrame)
+    buffer.add(BoxBottomLeft)
+    for _ in 0 ..< detailTextW:
+      buffer.add(BoxHor)
+    buffer.add(BoxBottomRight)
+    buffer.add(Reset)
   else:
-    buffer.add(ColorFrame & BoxVer & Reset)
+    buffer.add(ColorFrame)
+    buffer.add(BoxVer)
+    buffer.add(Reset)
     let contentRowIndex = r - 1
     var textContent = ""
     if state.visibleIndices.len > 0:
@@ -164,11 +172,13 @@ proc renderDetails*(
 
 proc renderStatusBar*(buffer: var string, state: AppState, termW: int): int =
   ## Renders the bottom status and search bar.
+  let visLenStr = $state.visibleIndices.len
+  let totalLenStr = $state.soa.hot.locators.len
   let pkgCountStrLen =
     if state.soa.hot.locators.len == 0:
       5 # "(...)"
     else:
-      2 + ($state.visibleIndices.len).len + 1 + ($state.soa.hot.locators.len).len
+      2 + visLenStr.len + 1 + totalLenStr.len
 
   let selCount = state.getSelectedCount()
   var statusPrefix = ""
@@ -224,9 +234,9 @@ proc renderStatusBar*(buffer: var string, state: AppState, termW: int): int =
   if state.soa.hot.locators.len == 0:
     buffer.add("...")
   else:
-    buffer.add($state.visibleIndices.len)
+    buffer.add(visLenStr)
     buffer.add("/")
-    buffer.add($state.soa.hot.locators.len)
+    buffer.add(totalLenStr)
   buffer.add(")")
   buffer.add(AnsiReset)
 
