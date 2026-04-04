@@ -16,8 +16,12 @@ proc isValidPackageName*(name: string): bool =
     return false
 
   # Check for dangerous patterns first
+  # These characters could be used for command injection
   if name.contains("..") or name.contains("\\") or name.contains(";") or
-      name.contains("|") or name.contains("&") or name.contains("$"):
+      name.contains("|") or name.contains("&") or name.contains("$") or
+      name.contains("`") or name.contains("'") or name.contains('"') or
+      name.contains("\n") or name.contains("\r") or name.contains("<") or
+      name.contains(">") or name.contains("(") or name.contains(")"):
     return false
 
   # Handle repo/name format
@@ -150,7 +154,7 @@ proc requestDetails*(idx: int32, name, repo: string, source: DataSource) =
 
 proc pollWorkerMessages*(): seq[Msg] =
   ## Retrieves all pending messages from the worker (non-blocking).
-  result = @[]
+  result = newSeqOfCap[Msg](8)
   while true:
     let (ok, msg) = resChan.tryRecv()
     if not ok:

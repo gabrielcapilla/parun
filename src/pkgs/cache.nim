@@ -73,10 +73,10 @@ proc validateCacheFile*(path: string): bool =
       return false
 
     return true
-  except:
+  except CatchableError:
     try:
       fs.close()
-    except:
+    except CatchableError:
       discard
     return false
 
@@ -157,12 +157,12 @@ proc convertJsonToBinary*(jsonPath, binPath: string): bool =
     fs.close()
     bs.close()
     return true
-  except:
+  except CatchableError:
     try:
       parser.close()
       fs.close()
       bs.close()
-    except:
+    except CatchableError:
       discard
     return false
 
@@ -271,11 +271,11 @@ proc streamParseJsonZeroAlloc*(jsonPath: string, callback: ZeroAllocCallback): b
     parser.close()
     fs.close()
     return true
-  except:
+  except CatchableError:
     try:
       parser.close()
       fs.close()
-    except:
+    except CatchableError:
       discard
     return false
 
@@ -290,7 +290,7 @@ proc getStreamedNimbleMeta*(jsonPath: string): Table[string, NimbleMeta] =
     parser.open(fs, jsonPath)
     var nameStr = ""
     var urlStr = ""
-    var tagsSeq: seq[string] = @[]
+    var tagsSeq = newSeqOfCap[string](8)
     var inTags = false
     var currentKey = ""
     var inObject = false
@@ -302,7 +302,7 @@ proc getStreamedNimbleMeta*(jsonPath: string): Table[string, NimbleMeta] =
         inObject = true
         nameStr = ""
         urlStr = ""
-        tagsSeq = @[]
+        tagsSeq = newSeqOfCap[string](10)
         parser.next()
       of jsonObjectEnd:
         if nameStr.len > 0:
@@ -341,11 +341,11 @@ proc getStreamedNimbleMeta*(jsonPath: string): Table[string, NimbleMeta] =
         parser.next()
     parser.close()
     fs.close()
-  except:
+  except CatchableError:
     try:
       parser.close()
       fs.close()
-    except:
+    except CatchableError:
       discard
 
 proc getCachePath*(): string =
@@ -403,11 +403,11 @@ proc validateJsonFile*(path: string): bool =
     fs.close()
     # Valid JSON starts with array or object
     return kind == jsonArrayStart or kind == jsonObjectStart
-  except:
+  except CatchableError:
     try:
       parser.close()
       fs.close()
-    except:
+    except CatchableError:
       discard
     return false
 
@@ -443,7 +443,7 @@ proc refreshCache*(cache: var PackageCache, keepJson: bool = false): bool =
     # Invalid JSON - clean up and fail
     try:
       removeFile(jsonPath)
-    except:
+    except CatchableError:
       discard
     return false
 
@@ -479,13 +479,13 @@ proc safeLoadOrRefreshCache*(cache: var PackageCache, keepJson: bool = false): b
     if fileExists(binPath):
       try:
         removeFile(binPath)
-      except:
+      except CatchableError:
         discard
     let jsonPath = cacheDir / cache.jsonPath
     if fileExists(jsonPath) and not keepJson:
       try:
         removeFile(jsonPath)
-      except:
+      except CatchableError:
         discard
     return loadOrRefreshCache(cache, keepJson)
 
