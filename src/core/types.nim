@@ -119,28 +119,50 @@ type
     hot*: PackageHot
     cold*: PackageCold
 
-  ResultsBuffer* = object
-    ## Fixed-size buffer for search results.
-    ##
-    ## Avoids dynamic allocations (GC) during filtering.
-    ## Passed by value/reference, designed to reside on the Stack if possible.
-    ##
-    ## Real indices pointing to PackageSOA.
-    indices*: array[2000, int32]
-    ## SIMD relevance score.
-    scores*: array[2000, int]
-    ## Current count of valid results (capped at 2000).
-    count*: int32
+  RequestLoadProc* = proc(id: int) {.gcsafe.}
+  RequestSearchProc* = proc(query: string, id: int) {.gcsafe.}
+  RequestDetailsProc* = proc(
+      idx: int32, name, repo: string, source: DataSource
+  ) {.gcsafe.}
 
-const MaxResultsCount* = 2000
+var
+  requestLoadAllImpl*: RequestLoadProc
+  requestLoadAurImpl*: RequestLoadProc
+  requestLoadNimbleImpl*: RequestLoadProc
+  requestSearchImpl*: RequestSearchProc
+  requestDetailsImpl*: RequestDetailsProc
 
-func safeAddResultsCount*(current: int32, delta: int32): int32 {.inline.} =
-  ## Safely adds to results count with overflow protection
-  ## Returns: min(current + delta, MaxResultsCount)
-  let sum = int64(current) + int64(delta)
-  if sum > MaxResultsCount:
-    return MaxResultsCount.int32
-  return sum.int32
+proc installRequestDispatch*(
+    loadAll, loadAur, loadNimble: RequestLoadProc,
+    search: RequestSearchProc,
+    details: RequestDetailsProc,
+) =
+  requestLoadAllImpl = loadAll
+  requestLoadAurImpl = loadAur
+  requestLoadNimbleImpl = loadNimble
+  requestSearchImpl = search
+  requestDetailsImpl = details
+
+proc dispatchLoad(impl: RequestLoadProc, id: int) {.inline.} =
+  if impl != nil:
+    impl(id)
+
+proc requestLoadAll*(id: int) {.inline.} =
+  dispatchLoad(requestLoadAllImpl, id)
+
+proc requestLoadAur*(id: int) {.inline.} =
+  dispatchLoad(requestLoadAurImpl, id)
+
+proc requestLoadNimble*(id: int) {.inline.} =
+  dispatchLoad(requestLoadNimbleImpl, id)
+
+proc requestSearch*(query: string, id: int) {.inline.} =
+  if requestSearchImpl != nil:
+    requestSearchImpl(query, id)
+
+proc requestDetails*(idx: int32, name, repo: string, source: DataSource) {.inline.} =
+  if requestDetailsImpl != nil:
+    requestDetailsImpl(idx, name, repo, source)
 
 type
   StringArenaHandle* = object

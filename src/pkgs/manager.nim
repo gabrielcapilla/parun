@@ -69,10 +69,33 @@ var
 proc threadEntry(args: WorkerThreadArgs) {.thread.} =
   workerLoop(args.toolType, args.reqChan[], args.resChan[])
 
+proc enqueueLoadAll(id: int) {.gcsafe.} =
+  reqChan.send(WorkerReq(kind: ReqLoadAll, searchId: id))
+
+proc enqueueLoadAur(id: int) {.gcsafe.} =
+  reqChan.send(WorkerReq(kind: ReqLoadAur, searchId: id))
+
+proc enqueueLoadNimble(id: int) {.gcsafe.} =
+  reqChan.send(WorkerReq(kind: ReqLoadNimble, searchId: id))
+
+proc enqueueSearch(query: string, id: int) {.gcsafe.} =
+  reqChan.send(WorkerReq(kind: ReqSearch, query: query, searchId: id))
+
+proc enqueueDetails(idx: int32, name, repo: string, source: DataSource) {.gcsafe.} =
+  reqChan.send(
+    WorkerReq(
+      kind: ReqDetails, pkgIdx: idx, pkgName: name, pkgRepo: repo, source: source
+    )
+  )
+
 proc initPackageManager*() =
   ## Initializes the worker thread and detects package manager (paru/yay/pacman).
   reqChan.open()
   resChan.open()
+
+  installRequestDispatch(
+    enqueueLoadAll, enqueueLoadAur, enqueueLoadNimble, enqueueSearch, enqueueDetails
+  )
 
   if findExe("paru").len > 0:
     activeTool = ManParu
@@ -93,25 +116,6 @@ proc shutdownPackageManager*() =
   # workerThread.join() # Optional but safer
   reqChan.close()
   resChan.close()
-
-proc requestLoadAll*(id: int) =
-  reqChan.send(WorkerReq(kind: ReqLoadAll, searchId: id))
-
-proc requestLoadAur*(id: int) =
-  reqChan.send(WorkerReq(kind: ReqLoadAur, searchId: id))
-
-proc requestLoadNimble*(id: int) =
-  reqChan.send(WorkerReq(kind: ReqLoadNimble, searchId: id))
-
-proc requestSearch*(query: string, id: int) =
-  reqChan.send(WorkerReq(kind: ReqSearch, query: query, searchId: id))
-
-proc requestDetails*(idx: int32, name, repo: string, source: DataSource) =
-  reqChan.send(
-    WorkerReq(
-      kind: ReqDetails, pkgIdx: idx, pkgName: name, pkgRepo: repo, source: source
-    )
-  )
 
 proc pollWorkerMessages*(messages: var seq[Msg]) =
   ## Retrieves all pending messages from the worker into a reusable buffer.

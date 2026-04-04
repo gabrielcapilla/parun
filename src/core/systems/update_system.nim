@@ -1,6 +1,5 @@
 import std/[tables, monotimes, times]
 import ../types, search_system, navigation_system, input_system
-import ../../pkgs/manager
 
 proc appendChars(dst: var seq[char], src: string) {.inline.} =
   let srcLen = src.len

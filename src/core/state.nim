@@ -3,7 +3,6 @@
 ## during the main loop.
 
 import std/[tables, math, monotimes, bitops]
-import ../pkgs/manager
 import types
 
 proc appendFromArena*(

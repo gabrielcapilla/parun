@@ -7,7 +7,6 @@
 ## Performance (Scalar): Same as standard character-by-character search.
 
 import std/[bitops, strutils]
-import ../core/types
 
 when defined(amd64) or (defined(i386) and defined(sse2)):
   ## SSE2 Implementation (x86/x64 with SSE2 support)
@@ -141,6 +140,12 @@ type SearchContext* = object
   firstCharVecs*: seq[M128i]
   ## Total query length (sum of all tokens) for density calculation.
   queryLen*: int
+
+type ResultsBuffer* = object
+  ## Fixed-size buffer for search results.
+  indices*: array[2000, int32]
+  scores*: array[2000, int]
+  count*: int32
 
 func prepareSearchContext*(query: string): SearchContext =
   ## Prepares the search context for a new query.
