@@ -112,11 +112,15 @@ proc renderUi*(
       let realIdx = state.visibleIndices[rowIdx]
       appendRow(
         buffer,
-        state,
+        state.soa,
+        state.textArena,
+        state.repoOffsets,
+        state.repoLens,
+        state.repoArena,
         realIdx,
         listW,
         rowIdx == state.cursor,
-        state.isSelected(int(realIdx)),
+        isSelected(state.selectionBits, int(realIdx)),
       )
     else:
       buffer.appendSpaces(listW)
@@ -129,5 +133,17 @@ proc renderUi*(
   for _ in 0 ..< termW:
     buffer.add(BoxHor)
   buffer.add(Reset & "\n")
-  let cx = renderStatusBar(buffer, state, termW)
+  let cx = renderStatusBar(
+    buffer,
+    state.visibleIndices.len,
+    state.soa.hot.locators.len,
+    state.selectionBits,
+    state.viewingSelection,
+    state.dataSource,
+    state.searchMode,
+    state.statusMessage,
+    state.searchBuffer,
+    state.searchCursor,
+    termW,
+  )
   return (cx, termH)

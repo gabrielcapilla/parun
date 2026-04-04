@@ -255,21 +255,38 @@ type
     ## Cursor position in input.
     searchCursor*: int
 
-    # Modes and Flags
+    # Async and Control
+    ## Incremental search request ID.
+    searchId*: int
+    ## ID associated with currently loaded data.
+    dataSearchId*: int
+    ## Scroll of the details panel.
+    detailScroll*: int
+    lastDetailWidth*: int
+    ## For debouncing.
+    lastInputTime*: MonoTime
+
+    statusMessage*: string
+
+    # Optimizations
+    ## Per-frame temporary arena.
+    stringArena*: StringArena
+
+    # Details wrapping cache
+    wrappedDetails*: seq[string]
+
+    # Modes
     searchMode*: SearchMode
     dataSource*: DataSource
     ## Mode to return to after exiting AUR/Nimble.
     baseSearchMode*: SearchMode
     baseDataSource*: DataSource
+    lastDetailIdx*: int32
+
+    # Packed flags
     ## Filter: View only selected?
     viewingSelection*: bool
-
-    # Async and Control
     isSearching*: bool
-    ## Incremental search request ID.
-    searchId*: int
-    ## ID associated with currently loaded data.
-    dataSearchId*: int
     ## Dirty flag for rendering.
     needsRedraw*: bool
     shouldQuit*: bool
@@ -277,26 +294,11 @@ type
     shouldUninstall*: bool
     showDetails*: bool
     justReceivedSearchResults*: bool
-    statusMessage*: string
-
-    ## Scroll of the details panel.
-    detailScroll*: int
-
-    # Details wrapping cache
-    wrappedDetails*: seq[string]
-    lastDetailWidth*: int
-    lastDetailIdx*: int32
-
-    # Optimizations
-    ## Per-frame temporary arena.
-    stringArena*: StringArena
-    ## For debouncing.
-    lastInputTime*: MonoTime
     debouncePending*: bool
 
-func isInstalled*(state: AppState, idx: int): bool {.inline, noSideEffect.} =
+func isInstalled*(soa: PackageSOA, idx: int): bool {.inline, noSideEffect.} =
   ## Checks if a package is installed using bitwise operations.
-  (state.soa.hot.flags[idx] and 1) != 0
+  (soa.hot.flags[idx] and 1) != 0
 
 func getEffectiveQuery*(buffer: string): string {.noSideEffect.} =
   ## Extracts the real query by removing magic prefixes and their aliases.

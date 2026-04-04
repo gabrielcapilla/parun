@@ -36,20 +36,24 @@ proc appendSpaces*(buffer: var string, count: int) =
 
 proc appendRow*(
     buffer: var string,
-    state: AppState,
+    soa: PackageSOA,
+    textArena: openArray[char],
+    repoOffsets: openArray[uint16],
+    repoLens: openArray[uint8],
+    repoArena: openArray[char],
     idx: int32,
     width: int,
     isCursor, isSelected: bool,
 ) =
   ## Renders a single row of the package list.
   let i = int(idx)
-  let isInstalled = state.isInstalled(i)
+  let isInstalled = isInstalled(soa, i)
   let tagW = if isInstalled: InstalledLen else: 0
   let maxTextW = max(0, width - PrefixLen - tagW)
 
-  let repoLen = state.getRepoLen(i)
-  let nameLen = state.getNameLen(i)
-  let verLen = state.getVersionLen(i)
+  let repoLen = getRepoLen(soa, repoLens, i)
+  let nameLen = getNameLen(soa, i)
+  let verLen = getVersionLen(soa, i)
 
   var printRepoLen = repoLen
   var printNameLen = nameLen
@@ -83,29 +87,29 @@ proc appendRow*(
   buffer.add(PrefixLUT[styleIdx])
 
   if isCursor:
-    state.appendRepo(i, buffer, printRepoLen)
+    appendRepo(soa, repoOffsets, repoLens, repoArena, i, buffer, printRepoLen)
     if hasSlash:
       buffer.add(SepSlash)
-      state.appendName(i, buffer, printNameLen)
+      appendName(soa, textArena, i, buffer, printNameLen)
     if hasSpace:
       buffer.add(Space)
-      state.appendVersion(i, buffer, printVerLen)
+      appendVersion(soa, textArena, i, buffer, printVerLen)
   else:
     buffer.add(ColorRepo)
-    state.appendRepo(i, buffer, printRepoLen)
+    appendRepo(soa, repoOffsets, repoLens, repoArena, i, buffer, printRepoLen)
     buffer.add(Reset)
 
     if hasSlash:
       buffer.add(SepSlash)
       buffer.add(ColorPkg)
       buffer.add(AnsiBold)
-      state.appendName(i, buffer, printNameLen)
+      appendName(soa, textArena, i, buffer, printNameLen)
       buffer.add(Reset)
 
     if hasSpace:
       buffer.add(Space)
       buffer.add(ColorVer)
-      state.appendVersion(i, buffer, printVerLen)
+      appendVersion(soa, textArena, i, buffer, printVerLen)
       buffer.add(Reset)
 
   if isInstalled:
@@ -170,17 +174,26 @@ proc renderDetails*(
       buffer.appendSpaces(detailTextW - visLen)
     buffer.add(ColorFrame & BoxVer & Reset)
 
-proc renderStatusBar*(buffer: var string, state: AppState, termW: int): int =
+proc renderStatusBar*(
+    buffer: var string,
+    visibleCount, totalCount: int,
+    selectionBits: openArray[uint64],
+    viewingSelection: bool,
+    dataSource: DataSource,
+    searchMode: SearchMode,
+    statusMessage, searchBuffer: string,
+    searchCursor, termW: int,
+): int =
   ## Renders the bottom status and search bar.
-  let visLenStr = $state.visibleIndices.len
-  let totalLenStr = $state.soa.hot.locators.len
+  let visLenStr = $visibleCount
+  let totalLenStr = $totalCount
   let pkgCountStrLen =
-    if state.soa.hot.locators.len == 0:
+    if totalCount == 0:
       5 # "(...)"
     else:
       2 + visLenStr.len + 1 + totalLenStr.len
 
-  let selCount = state.getSelectedCount()
+  let selCount = getSelectedCount(selectionBits)
   var statusPrefix = ""
   var statusPrefixLen = 0
   if selCount > 0:
@@ -189,14 +202,14 @@ proc renderStatusBar*(buffer: var string, state: AppState, termW: int): int =
 
   var modeStr = ""
   var modeStrLen = 0
-  if state.viewingSelection:
+  if viewingSelection:
     modeStr = ColorModeReview & "[Rev]" & AnsiReset
     modeStrLen = 5
-  elif state.dataSource == SourceNimble:
+  elif dataSource == SourceNimble:
     modeStr = ColorModeNimble & "[Nimble]" & AnsiReset
     modeStrLen = 8
   else:
-    if state.searchMode == ModeAUR:
+    if searchMode == ModeAUR:
       modeStr = ColorModeAur & "[Aur]" & AnsiReset
       modeStrLen = 5
     else:
@@ -204,13 +217,13 @@ proc renderStatusBar*(buffer: var string, state: AppState, termW: int): int =
       modeStrLen = 7
 
   var statusMsgStr = ""
-  if state.statusMessage.len > 0:
-    statusMsgStr = " " & AnsiBold & state.statusMessage & AnsiReset
-    modeStrLen += 1 + state.statusMessage.len
+  if statusMessage.len > 0:
+    statusMsgStr = " " & AnsiBold & statusMessage & AnsiReset
+    modeStrLen += 1 + statusMessage.len
 
-  let cursorVisualX = 2 + visibleWidth(state.searchBuffer[0 ..< state.searchCursor])
+  let cursorVisualX = 2 + visibleWidth(searchBuffer[0 ..< searchCursor])
 
-  let leftSideLen = 2 + state.searchBuffer.len
+  let leftSideLen = 2 + searchBuffer.len
   let rightSideLen = statusPrefixLen + modeStrLen + 1 + pkgCountStrLen
   let spacing = max(0, termW - leftSideLen - rightSideLen)
 
@@ -219,7 +232,7 @@ proc renderStatusBar*(buffer: var string, state: AppState, termW: int): int =
   buffer.add(">")
   buffer.add(AnsiReset)
   buffer.add(" ")
-  buffer.add(state.searchBuffer)
+  buffer.add(searchBuffer)
 
   buffer.appendSpaces(spacing)
 
@@ -231,7 +244,7 @@ proc renderStatusBar*(buffer: var string, state: AppState, termW: int): int =
   # Pkg Count
   buffer.add(AnsiDim)
   buffer.add("(")
-  if state.soa.hot.locators.len == 0:
+  if totalCount == 0:
     buffer.add("...")
   else:
     buffer.add(visLenStr)

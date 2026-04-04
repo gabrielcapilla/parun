@@ -67,7 +67,6 @@ proc workerLoop*(
     toolType: PkgManagerType,
     reqChan: var Channel[WorkerReq],
     resChan: var Channel[Msg],
-    tools: array[PkgManagerType, ToolDef],
 ) {.thread.} =
   ## Main loop of the worker thread.
   var currentReq: WorkerReq
@@ -78,10 +77,11 @@ proc workerLoop*(
   # HTTP client with default SSL certificate validation
   # Note: Nim's httpclient validates certificates by default
   var client = newHttpClient(timeout = 3000)
-  let toolDef = tools[toolType]
+  let toolDef = getToolDef(toolType)
 
   var globalInstMap = initTable[string, string]()
   var instMapLoaded = false
+  var detailBatch = newSeqOfCap[WorkerReq](16)
 
   while true:
     if not hasReq:
@@ -286,13 +286,13 @@ proc workerLoop*(
           addPackage(bb, name, ver, repo, globalInstMap.hasKey(name))
         bb.flushBatch(resChan, req.searchId, tStart)
       of ReqDetails:
-        var batch = newSeqOfCap[WorkerReq](16)
-        batch.add(req)
-        while batch.len < 16:
+        detailBatch.setLen(0)
+        detailBatch.add(req)
+        while detailBatch.len < 16:
           let (ok, nextReq) = reqChan.tryRecv()
           if ok:
             if nextReq.kind == ReqDetails:
-              batch.add(nextReq)
+              detailBatch.add(nextReq)
             else:
               currentReq = nextReq
               hasReq = true
@@ -300,7 +300,7 @@ proc workerLoop*(
           else:
             break
 
-        for r in batch:
+        for r in detailBatch:
           var cacheKey = newStringOfCap(r.pkgRepo.len + r.pkgName.len + 16)
           cacheKey.add($r.source)
           cacheKey.add(':')
@@ -326,27 +326,35 @@ proc workerLoop*(
               let rawBase = getRawBaseUrl(meta.url)
               if rawBase.len > 0:
                 let lowerName = r.pkgName.toLowerAscii()
-                var names = newSeqOfCap[string](2)
-                names.add(r.pkgName)
-                if r.pkgName != lowerName:
-                  names.add(lowerName)
                 for branch in ["master", "main"]:
-                  for nameVariant in names:
-                    try:
-                      content = parseNimbleInfo(
-                        downloadWithRetry(
-                          client,
-                          rawBase & "/" & branch & "/" & nameVariant & ".nimble",
-                          maxRetries = 2, # Shorter retries for speculative fetches
-                        ),
-                        r.pkgName,
-                        meta.url,
-                        meta.tags,
-                      )
-                      fetched = true
-                      break
-                    except CatchableError:
-                      continue
+                  try:
+                    content = parseNimbleInfo(
+                      downloadWithRetry(
+                        client,
+                        rawBase & "/" & branch & "/" & r.pkgName & ".nimble",
+                        maxRetries = 2, # Shorter retries for speculative fetches
+                      ),
+                      r.pkgName,
+                      meta.url,
+                      meta.tags,
+                    )
+                    fetched = true
+                  except CatchableError:
+                    if r.pkgName != lowerName:
+                      try:
+                        content = parseNimbleInfo(
+                          downloadWithRetry(
+                            client,
+                            rawBase & "/" & branch & "/" & lowerName & ".nimble",
+                            maxRetries = 2, # Shorter retries for speculative fetches
+                          ),
+                          r.pkgName,
+                          meta.url,
+                          meta.tags,
+                        )
+                        fetched = true
+                      except CatchableError:
+                        discard
                   if fetched:
                     break
 

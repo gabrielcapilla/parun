@@ -11,13 +11,13 @@ type
     ReqStop
 
   WorkerReq* = object
-    kind*: WorkerReqKind
     query*, pkgName*, pkgRepo*: string
-    pkgIdx*: int32
     searchId*: int
+    pkgIdx*: int32
     source*: DataSource
-    targetMode*: SearchMode
     targetSource*: DataSource
+    targetMode*: SearchMode
+    kind*: WorkerReqKind
 
   PkgManagerType* = enum
     ManPacman
@@ -42,7 +42,41 @@ type
     source*: DataSource
     mode*: SearchMode
 
+  WorkerThreadArgs* = object
+    reqChan*: ptr Channel[WorkerReq]
+    resChan*: ptr Channel[Msg]
+    toolType*: PkgManagerType
+
+func createPacmanToolDef(binName: string, withSudo: bool): ToolDef =
+  ToolDef(
+    bin: binName,
+    installCmd: " -S ",
+    uninstallCmd: " -R ",
+    searchCmd: " -Ss ",
+    sudo: withSudo,
+    supportsAur: false,
+  )
+
+func createNimbleToolDef(): ToolDef =
+  ToolDef(
+    bin: "nimble",
+    installCmd: " install ",
+    uninstallCmd: " uninstall ",
+    searchCmd: " search ",
+    sudo: false,
+    supportsAur: false,
+  )
+
 const BatchSize* = 64 * 1024
+const Tools* = [
+  ManPacman: createPacmanToolDef("pacman", true),
+  ManParu: createPacmanToolDef("paru", false),
+  ManYay: createPacmanToolDef("yay", false),
+  ManNimble: createNimbleToolDef(),
+]
+
+func getToolDef*(tool: PkgManagerType): lent ToolDef {.inline.} =
+  Tools[tool]
 
 func initBatchBuilder*(source: DataSource, mode: SearchMode): BatchBuilder =
   result.source = source

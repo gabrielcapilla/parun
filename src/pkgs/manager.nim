@@ -57,58 +57,17 @@ proc isValidPackageName*(name: string): bool =
         return false
     return true
 
-func createPacmanToolDef(binName: string, withSudo: bool): ToolDef =
-  ToolDef(
-    bin: binName,
-    installCmd: " -S ",
-    uninstallCmd: " -R ",
-    searchCmd: " -Ss ",
-    sudo: withSudo,
-    supportsAur: false,
-  )
-
-func createNimbleToolDef(): ToolDef =
-  ToolDef(
-    bin: "nimble",
-    installCmd: " install ",
-    uninstallCmd: " uninstall ",
-    searchCmd: " search ",
-    sudo: false,
-    supportsAur: false,
-  )
-
-const Tools*: array[PkgManagerType, ToolDef] = [
-  ManPacman: createPacmanToolDef("pacman", true),
-  ManParu: createPacmanToolDef("paru", false),
-  ManYay: createPacmanToolDef("yay", false),
-  ManNimble: createNimbleToolDef(),
-]
-
 var
   ## Thread-safe channels for worker communication
   ## Nim channels are lock-free and thread-safe by design
   reqChan: Channel[WorkerReq]
   resChan: Channel[Msg]
-  workerThread: Thread[
-    (
-      PkgManagerType,
-      ptr Channel[WorkerReq],
-      ptr Channel[Msg],
-      array[PkgManagerType, ToolDef],
-    )
-  ]
+  workerThread: Thread[WorkerThreadArgs]
   activeTool*: PkgManagerType
 
 # Wrapper for thread creation due to closure limitations or parameter count
-proc threadEntry(
-    args: (
-      PkgManagerType,
-      ptr Channel[WorkerReq],
-      ptr Channel[Msg],
-      array[PkgManagerType, ToolDef],
-    )
-) {.thread.} =
-  workerLoop(args[0], args[1][], args[2][], args[3])
+proc threadEntry(args: WorkerThreadArgs) {.thread.} =
+  workerLoop(args.toolType, args.reqChan[], args.resChan[])
 
 proc initPackageManager*() =
   ## Initializes the worker thread and detects package manager (paru/yay/pacman).
@@ -123,7 +82,9 @@ proc initPackageManager*() =
     activeTool = ManPacman
 
   createThread(
-    workerThread, threadEntry, (activeTool, addr reqChan, addr resChan, Tools)
+    workerThread,
+    threadEntry,
+    WorkerThreadArgs(toolType: activeTool, reqChan: addr reqChan, resChan: addr resChan),
   )
 
 proc shutdownPackageManager*() =
@@ -152,24 +113,24 @@ proc requestDetails*(idx: int32, name, repo: string, source: DataSource) =
     )
   )
 
-proc pollWorkerMessages*(): seq[Msg] =
-  ## Retrieves all pending messages from the worker (non-blocking).
-  result = newSeqOfCap[Msg](8)
+proc pollWorkerMessages*(messages: var seq[Msg]) =
+  ## Retrieves all pending messages from the worker into a reusable buffer.
+  messages.setLen(0)
   while true:
     let (ok, msg) = resChan.tryRecv()
     if not ok:
       break
-    result.add(msg)
+    messages.add(msg)
 
 func buildCmd*(tool: PkgManagerType, op: string, targets: seq[string]): string =
-  let def = Tools[tool]
+  let def = getToolDef(tool)
   let prefix = if def.sudo and tool != ManNimble: "sudo " else: ""
   result = prefix & def.bin & op & targets.join(" ")
 
 proc runTransaction*(tool: PkgManagerType, targets: seq[string], install: bool): int =
   if targets.len == 0:
     return 0
-  let def = Tools[tool]
+  let def = getToolDef(tool)
   let op = if install: def.installCmd else: def.uninstallCmd
   let cmd = buildCmd(tool, op, targets)
   return execCmd(cmd)

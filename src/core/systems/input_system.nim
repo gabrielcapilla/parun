@@ -8,9 +8,11 @@ proc processInput*(state: var AppState, k: char, listHeight: int) =
     state.cursor = 0
     state.scroll = 0
     if state.viewingSelection:
-      filterBySelection(state, state.visibleIndices)
+      filterBySelection(
+        state.selectionBits, state.soa.hot.locators.len, state.visibleIndices
+      )
     else:
-      filterIndices(state, state.searchBuffer, state.visibleIndices)
+      filterIndices(state.searchBuffer, state.soa, state.textArena, state.visibleIndices)
     return
 
   if k == KeyF1:
@@ -38,6 +40,6 @@ proc processInput*(state: var AppState, k: char, listHeight: int) =
       elif state.dataSource == SourceSystem and state.searchMode != state.baseSearchMode:
         restoreBaseState(state)
 
-    filterIndices(state, state.searchBuffer, state.visibleIndices)
+    filterIndices(state.searchBuffer, state.soa, state.textArena, state.visibleIndices)
     state.debouncePending = false
     state.statusMessage = ""

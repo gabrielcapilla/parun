@@ -2,7 +2,31 @@ import std/[tables, monotimes, times]
 import ../types, search_system, navigation_system, input_system
 import ../../pkgs/manager
 
-proc appendBatch*(db: var PackageDB, msg: Msg) =
+proc appendChars(dst: var seq[char], src: string) {.inline.} =
+  let srcLen = src.len
+  if srcLen == 0:
+    return
+  let oldLen = dst.len
+  dst.setLen(oldLen + srcLen)
+  copyMem(addr dst[oldLen], unsafeAddr src[0], srcLen)
+
+proc syncActiveDb(state: var AppState) =
+  let db =
+    case state.dataSource
+    of SourceSystem:
+      (if state.searchMode == ModeLocal: addr state.systemDB
+      else: addr state.aurDB)
+    of SourceNimble:
+      addr state.nimbleDB
+  db[].soa = state.soa
+  db[].textArena = state.textArena
+  db[].repos = state.repos
+  db[].repoArena = state.repoArena
+  db[].repoLens = state.repoLens
+  db[].repoOffsets = state.repoOffsets
+  db[].isLoaded = true
+
+proc appendBatch*(db: var PackageDB, msg: var Msg) =
   let batchLen = msg.soa.hot.locators.len
   var repoMap = newSeq[uint8](msg.repos.len)
   var dbRepoLookup = initTable[string, uint8](db.repos.len + msg.repos.len)
@@ -18,10 +42,7 @@ proc appendBatch*(db: var PackageDB, msg: Msg) =
       let offset = uint16(db.repoArena.len)
       db.repoOffsets.add(offset)
       db.repoLens.add(uint8(r.len))
-      let oldLen = db.repoArena.len
-      db.repoArena.setLen(oldLen + r.len)
-      if r.len > 0:
-        copyMem(addr db.repoArena[oldLen], unsafeAddr r[0], r.len)
+      appendChars(db.repoArena, r)
       repoMap[i] = rIdx
       dbRepoLookup[r] = rIdx
 
@@ -44,10 +65,9 @@ proc appendBatch*(db: var PackageDB, msg: Msg) =
     else:
       db.soa.cold.repoIndices[oldLen + i] = 0
 
-  for c in msg.textChunk:
-    db.textArena.add(c)
+  appendChars(db.textArena, msg.textChunk)
 
-proc handleSearchResults*(state: var AppState, msg: Msg, listHeight: int) =
+proc handleSearchResults*(state: var AppState, msg: var Msg, listHeight: int) =
   let isBackground =
     (msg.reqSource != state.dataSource) or
     (msg.reqSource == SourceSystem and msg.reqMode != state.searchMode)
@@ -96,14 +116,10 @@ proc handleSearchResults*(state: var AppState, msg: Msg, listHeight: int) =
         state.repoOffsets.add(uint16(state.repoArena.len))
         state.repos.add(r)
         state.repoLens.add(uint8(r.len))
-        let oldLen = state.repoArena.len
-        state.repoArena.setLen(oldLen + r.len)
-        if r.len > 0:
-          copyMem(addr state.repoArena[oldLen], unsafeAddr r[0], r.len)
+        appendChars(state.repoArena, r)
 
     let baseOffset = uint32(state.textArena.len)
-    for c in msg.textChunk:
-      state.textArena.add(c)
+    appendChars(state.textArena, msg.textChunk)
 
     let batchLen = msg.soa.hot.locators.len
     let oldLen = state.soa.hot.locators.len
@@ -125,31 +141,16 @@ proc handleSearchResults*(state: var AppState, msg: Msg, listHeight: int) =
     if state.selectionBits.len < requiredWords:
       state.selectionBits.setLen(requiredWords)
 
-    if state.dataSource == SourceSystem and state.searchMode == ModeLocal:
-      state.systemDB.soa = state.soa
-      state.systemDB.textArena = state.textArena
-      state.systemDB.repos = state.repos
-      state.systemDB.isLoaded = true
-    elif state.dataSource == SourceNimble:
-      state.nimbleDB.soa = state.soa
-      state.nimbleDB.textArena = state.textArena
-      state.nimbleDB.repos = state.repos
-      state.nimbleDB.isLoaded = true
-    elif state.dataSource == SourceSystem and state.searchMode == ModeAUR:
-      state.aurDB.soa = state.soa
-      state.aurDB.textArena = state.textArena
-      state.aurDB.repos = state.repos
-      state.aurDB.isLoaded = true
+    syncActiveDb(state)
 
     if not state.viewingSelection:
-      filterIndices(state, state.searchBuffer, state.visibleIndices)
+      filterIndices(state.searchBuffer, state.soa, state.textArena, state.visibleIndices)
     updateNavigation(state, listHeight)
   else:
     # Handle non-append case (replace all)
     state.soa = msg.soa
-    state.textArena = newSeqOfCap[char](msg.textChunk.len)
-    for c in msg.textChunk:
-      state.textArena.add(c)
+    state.textArena.setLen(0)
+    appendChars(state.textArena, msg.textChunk)
     state.repos = msg.repos
     state.dataSearchId = msg.searchId
     state.selectionBits.setLen((state.soa.hot.locators.len + 63) div 64)
@@ -162,63 +163,46 @@ proc handleSearchResults*(state: var AppState, msg: Msg, listHeight: int) =
     for r in state.repos:
       state.repoOffsets.add(uint16(state.repoArena.len))
       state.repoLens.add(uint8(r.len))
-      for c in r:
-        state.repoArena.add(c)
+      appendChars(state.repoArena, r)
 
-    # Update background DBs
-    if state.dataSource == SourceSystem and state.searchMode == ModeLocal:
-      state.systemDB.soa = state.soa
-      state.systemDB.textArena = state.textArena
-      state.systemDB.repos = state.repos
-      state.systemDB.isLoaded = true
-    elif state.dataSource == SourceNimble:
-      state.nimbleDB.soa = state.soa
-      state.nimbleDB.textArena = state.textArena
-      state.nimbleDB.repos = state.repos
-      state.nimbleDB.isLoaded = true
-    elif state.dataSource == SourceSystem and state.searchMode == ModeAUR:
-      state.aurDB.soa = state.soa
-      state.aurDB.textArena = state.textArena
-      state.aurDB.repos = state.repos
-      state.aurDB.isLoaded = true
+    syncActiveDb(state)
 
     if not state.viewingSelection:
-      filterIndices(state, state.searchBuffer, state.visibleIndices)
+      filterIndices(state.searchBuffer, state.soa, state.textArena, state.visibleIndices)
     state.cursor = 0
     state.scroll = 0
 
   state.isSearching = false
   state.justReceivedSearchResults = true
 
-proc update*(state: AppState, msg: Msg, listHeight: int): AppState =
-  result = state
-  result.needsRedraw = true
+proc update*(state: var AppState, msg: var Msg, listHeight: int) =
+  state.needsRedraw = true
 
   case msg.kind
   of MsgInput:
-    processInput(result, msg.key, listHeight)
+    processInput(state, msg.key, listHeight)
   of MsgTick:
-    if result.debouncePending:
-      if (getMonoTime() - result.lastInputTime).inMilliseconds() > 500:
-        result.debouncePending = false
-        let effectiveQuery = getEffectiveQuery(result.searchBuffer)
-        if effectiveQuery.len > 1 and result.searchMode != ModeAUR:
-          result.searchId.inc()
-          result.isSearching = true
-          result.statusMessage = "Searching..."
-          requestSearch(effectiveQuery, result.searchId)
+    if state.debouncePending:
+      if (getMonoTime() - state.lastInputTime).inMilliseconds() > 500:
+        state.debouncePending = false
+        let effectiveQuery = getEffectiveQuery(state.searchBuffer)
+        if effectiveQuery.len > 1 and state.searchMode != ModeAUR:
+          state.searchId.inc()
+          state.isSearching = true
+          state.statusMessage = "Searching..."
+          requestSearch(effectiveQuery, state.searchId)
         else:
-          if result.searchMode != ModeAUR:
-            result.visibleIndices.setLen(0)
-            if result.searchMode == ModeAUR:
-              result.statusMessage = "Type to search AUR..."
+          if state.searchMode != ModeAUR:
+            state.visibleIndices.setLen(0)
+            if state.searchMode == ModeAUR:
+              state.statusMessage = "Type to search AUR..."
   of MsgSearchResults:
-    handleSearchResults(result, msg, listHeight)
+    handleSearchResults(state, msg, listHeight)
   of MsgDetailsLoaded:
-    if result.detailsCache.len >= DetailsCacheLimit:
-      result.detailsCache.clear()
-    result.detailsCache[msg.pkgIdx] = msg.content
+    if state.detailsCache.len >= DetailsCacheLimit:
+      state.detailsCache.clear()
+    state.detailsCache[msg.pkgIdx] = msg.content
   of MsgError:
-    result.searchBuffer = "Error: " & msg.errMsg
-    result.isSearching = false
-    result.statusMessage = "Error"
+    state.searchBuffer = "Error: " & msg.errMsg
+    state.isSearching = false
+    state.statusMessage = "Error"

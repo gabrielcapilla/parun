@@ -290,7 +290,7 @@ proc getStreamedNimbleMeta*(jsonPath: string): Table[string, NimbleMeta] =
     parser.open(fs, jsonPath)
     var nameStr = ""
     var urlStr = ""
-    var tagsSeq = newSeqOfCap[string](8)
+    var tagsSeq = newSeqOfCap[string](10)
     var inTags = false
     var currentKey = ""
     var inObject = false
@@ -300,9 +300,11 @@ proc getStreamedNimbleMeta*(jsonPath: string): Table[string, NimbleMeta] =
       case parser.kind
       of jsonObjectStart:
         inObject = true
-        nameStr = ""
-        urlStr = ""
-        tagsSeq = newSeqOfCap[string](10)
+        nameStr.setLen(0)
+        urlStr.setLen(0)
+        tagsSeq.setLen(0)
+        currentKey.setLen(0)
+        inTags = false
         parser.next()
       of jsonObjectEnd:
         if nameStr.len > 0:
@@ -371,17 +373,19 @@ proc getCacheStatus*(cache: PackageCache): CacheStatus =
     return CacheStale
   return CacheFresh
 
-proc downloadCompressedGzOnly(url: string, gzOutputPath: string): bool =
-  let downloadCmd = "curl -sfL --max-time 60 " & url & " > \"" & gzOutputPath & "\""
+proc downloadToPath(url: string, outputPath: string): bool =
+  let downloadCmd = "curl -sfL --max-time 60 " & url & " > \"" & outputPath & "\""
   return execCmd(downloadCmd) == 0
+
+proc downloadCompressedGzOnly(url: string, gzOutputPath: string): bool =
+  return downloadToPath(url, gzOutputPath)
 
 proc decompressExistingGz(gzPath: string, outputPath: string): bool =
   let decompressCmd = "gunzip -c \"" & gzPath & "\" > \"" & outputPath & "\""
   return execCmd(decompressCmd) == 0
 
 proc downloadUncompressed(url: string, outputPath: string): bool =
-  let downloadCmd = "curl -sfL --max-time 60 " & url & " > \"" & outputPath & "\""
-  return execCmd(downloadCmd) == 0
+  return downloadToPath(url, outputPath)
 
 proc validateJsonFile*(path: string): bool =
   ## Validates that a file contains valid JSON

@@ -61,6 +61,8 @@ proc main() =
     shutdownPackageManager()
 
   var renderBuffer = newStringOfCap(64 * 1024)
+  var transactionTargets = newSeqOfCap[string](16)
+  var pendingMsgs = newSeqOfCap[Msg](16)
 
   # Main Loop
   while not appState.shouldQuit:
@@ -70,8 +72,8 @@ proc main() =
 
     # Install/Uninstall Management
     if appState.shouldInstall or appState.shouldUninstall:
-      let selCount = appState.getSelectedCount()
-      var targets: seq[string] = newSeqOfCap[string](selCount + 1)
+      transactionTargets.setLen(0)
+      let selCount = getSelectedCount(appState.selectionBits)
       let totalPkgs = appState.soa.hot.locators.len
 
       if selCount > 0:
@@ -82,32 +84,44 @@ proc main() =
             if testBit(word, bit):
               let realIdx = i * 64 + bit
               if realIdx < totalPkgs:
-                let name = appState.getName(realIdx)
+                let name = getName(appState.soa, appState.textArena, realIdx)
                 if appState.shouldInstall:
                   if appState.dataSource == SourceNimble:
-                    targets.add(name)
+                    transactionTargets.add(name)
                   else:
-                    targets.add(appState.getRepo(realIdx) & "/" & name)
+                    transactionTargets.add(
+                      getRepo(
+                        appState.soa,
+                        appState.repoOffsets,
+                        appState.repoLens,
+                        appState.repoArena,
+                        realIdx,
+                      ) & "/" & name
+                    )
                 else:
-                  targets.add(name)
+                  transactionTargets.add(name)
       elif appState.visibleIndices.len > 0:
         let idx = int(appState.visibleIndices[appState.cursor])
-        let name = appState.getName(idx)
+        let name = getName(appState.soa, appState.textArena, idx)
         if appState.shouldInstall:
           if appState.dataSource == SourceNimble:
-            targets.add(name)
+            transactionTargets.add(name)
           else:
-            targets.add(appState.getRepo(idx) & "/" & name)
+            transactionTargets.add(
+              getRepo(
+                appState.soa, appState.repoOffsets, appState.repoLens, appState.repoArena, idx
+              ) & "/" & name
+            )
         else:
-          targets.add(name)
+          transactionTargets.add(name)
 
-      if targets.len > 0:
+      if transactionTargets.len > 0:
         restoreTerminal(origTerm)
         let code =
           if appState.shouldInstall:
-            installPackages(targets, appState.dataSource)
+            installPackages(transactionTargets, appState.dataSource)
           else:
-            uninstallPackages(targets, appState.dataSource)
+            uninstallPackages(transactionTargets, appState.dataSource)
         quit(code)
       else:
         appState.shouldInstall = false
@@ -139,7 +153,12 @@ proc main() =
         if not appState.detailsCache.hasKey(idx):
           let i = int(idx)
           requestDetails(
-            idx, appState.getName(i), appState.getRepo(i), appState.dataSource
+            idx,
+            getName(appState.soa, appState.textArena, i),
+            getRepo(
+              appState.soa, appState.repoOffsets, appState.repoLens, appState.repoArena, i
+            ),
+            appState.dataSource,
           )
 
         # Speculative: Prefetch 3 ahead and 2 behind
@@ -150,7 +169,16 @@ proc main() =
             if not appState.detailsCache.hasKey(pIdx):
               let i = int(pIdx)
               requestDetails(
-                pIdx, appState.getName(i), appState.getRepo(i), appState.dataSource
+                pIdx,
+                getName(appState.soa, appState.textArena, i),
+                getRepo(
+                  appState.soa,
+                  appState.repoOffsets,
+                  appState.repoLens,
+                  appState.repoArena,
+                  i,
+                ),
+                appState.dataSource,
               )
 
     # Event Waiting (Input or Resize)
@@ -165,14 +193,16 @@ proc main() =
       elif key.fd == STDIN_FILENO:
         let k = getKeyAsync()
         if k != '\0':
-          appState = update(appState, Msg(kind: MsgInput, key: k), listH)
+          var inputMsg = Msg(kind: MsgInput, key: k)
+          update(appState, inputMsg, listH)
 
           if appState.shouldQuit:
             break
 
     # Worker message processing
-    for msg in pollWorkerMessages():
-      appState = update(appState, msg, listH)
+    pollWorkerMessages(pendingMsgs)
+    for i in 0 ..< pendingMsgs.len:
+      update(appState, pendingMsgs[i], listH)
 
       if appState.shouldQuit:
         break

@@ -7,7 +7,7 @@ import ../pkgs/manager
 import types
 
 proc appendFromArena*(
-    state: AppState, offset, len: int, buffer: var string, maxLen: int = -1
+    textArena: openArray[char], offset, len: int, buffer: var string, maxLen: int = -1
 ) {.inline.} =
   ## Appends data from text arena to buffer with bounds checking
   ## Following DOD: Inline for performance, checks for safety
@@ -25,32 +25,52 @@ proc appendFromArena*(
 
   # Critical bounds check: ensure we don't read past arena end
   let endOffset = offset + copyLen
-  if endOffset > state.textArena.len:
+  if endOffset > textArena.len:
     # Clamp to available data
-    copyLen = state.textArena.len - offset
+    copyLen = textArena.len - offset
     if copyLen <= 0:
       return
 
   let currentLen = buffer.len
   buffer.setLen(currentLen + copyLen)
-  if state.textArena.len > 0 and copyLen > 0:
-    copyMem(addr buffer[currentLen], unsafeAddr state.textArena[offset], copyLen)
+  if textArena.len > 0 and copyLen > 0:
+    copyMem(addr buffer[currentLen], unsafeAddr textArena[offset], copyLen)
 
-proc appendName*(state: AppState, idx: int, buffer: var string, maxLen: int = -1) =
-  let offset = int(state.soa.hot.locators[idx])
-  let len = int(state.soa.hot.nameLens[idx])
-  appendFromArena(state, offset, len, buffer, maxLen)
+proc appendName*(
+    soa: PackageSOA,
+    textArena: openArray[char],
+    idx: int,
+    buffer: var string,
+    maxLen: int = -1,
+) =
+  let offset = int(soa.hot.locators[idx])
+  let len = int(soa.hot.nameLens[idx])
+  appendFromArena(textArena, offset, len, buffer, maxLen)
 
-proc appendVersion*(state: AppState, idx: int, buffer: var string, maxLen: int = -1) =
-  let nameLen = int(state.soa.hot.nameLens[idx])
-  let offset = int(state.soa.hot.locators[idx]) + nameLen
-  let len = int(state.soa.cold.verLens[idx])
-  appendFromArena(state, offset, len, buffer, maxLen)
+proc appendVersion*(
+    soa: PackageSOA,
+    textArena: openArray[char],
+    idx: int,
+    buffer: var string,
+    maxLen: int = -1,
+) =
+  let nameLen = int(soa.hot.nameLens[idx])
+  let offset = int(soa.hot.locators[idx]) + nameLen
+  let len = int(soa.cold.verLens[idx])
+  appendFromArena(textArena, offset, len, buffer, maxLen)
 
-proc appendRepo*(state: AppState, idx: int, buffer: var string, maxLen: int = -1) =
-  let rIdx = state.soa.cold.repoIndices[idx]
-  let rOffset = int(state.repoOffsets[rIdx])
-  let rLen = int(state.repoLens[int(rIdx)])
+proc appendRepo*(
+    soa: PackageSOA,
+    repoOffsets: openArray[uint16],
+    repoLens: openArray[uint8],
+    repoArena: openArray[char],
+    idx: int,
+    buffer: var string,
+    maxLen: int = -1,
+) =
+  let rIdx = soa.cold.repoIndices[idx]
+  let rOffset = int(repoOffsets[rIdx])
+  let rLen = int(repoLens[int(rIdx)])
   var copyLen = rLen
   if maxLen >= 0 and maxLen < rLen:
     copyLen = maxLen
@@ -58,44 +78,59 @@ proc appendRepo*(state: AppState, idx: int, buffer: var string, maxLen: int = -1
   if copyLen > 0:
     let currentLen = buffer.len
     buffer.setLen(currentLen + copyLen)
-    copyMem(addr buffer[currentLen], unsafeAddr state.repoArena[rOffset], copyLen)
+    copyMem(addr buffer[currentLen], unsafeAddr repoArena[rOffset], copyLen)
 
-func getNameLen*(state: AppState, idx: int): int {.inline, noSideEffect.} =
-  int(state.soa.hot.nameLens[idx])
+func getNameLen*(soa: PackageSOA, idx: int): int {.inline, noSideEffect.} =
+  int(soa.hot.nameLens[idx])
 
-func getVersionLen*(state: AppState, idx: int): int {.inline, noSideEffect.} =
-  int(state.soa.cold.verLens[idx])
+func getVersionLen*(soa: PackageSOA, idx: int): int {.inline, noSideEffect.} =
+  int(soa.cold.verLens[idx])
 
-func getRepoLen*(state: AppState, idx: int): int {.inline, noSideEffect.} =
-  int(state.repoLens[int(state.soa.cold.repoIndices[idx])])
+func getRepoLen*(soa: PackageSOA, repoLens: openArray[uint8], idx: int): int {.
+    inline, noSideEffect.} =
+  int(repoLens[int(soa.cold.repoIndices[idx])])
 
-func getName*(state: AppState, idx: int): string =
-  result = newStringOfCap(state.getNameLen(idx))
-  state.appendName(idx, result)
+func getName*(soa: PackageSOA, textArena: openArray[char], idx: int): string =
+  result = newStringOfCap(getNameLen(soa, idx))
+  appendName(soa, textArena, idx, result)
 
-func getVersion*(state: AppState, idx: int): string =
-  result = newStringOfCap(state.getVersionLen(idx))
-  state.appendVersion(idx, result)
+func getVersion*(soa: PackageSOA, textArena: openArray[char], idx: int): string =
+  result = newStringOfCap(getVersionLen(soa, idx))
+  appendVersion(soa, textArena, idx, result)
 
-func getRepo*(state: AppState, idx: int): string =
-  let rIdx = int(state.soa.cold.repoIndices[idx])
-  let repoOffset = int(state.repoOffsets[rIdx])
-  let repoLen = int(state.repoLens[int(state.soa.cold.repoIndices[idx])])
-  if repoOffset + repoLen <= state.repoArena.len:
+func getRepo*(
+    soa: PackageSOA,
+    repoOffsets: openArray[uint16],
+    repoLens: openArray[uint8],
+    repoArena: openArray[char],
+    idx: int,
+): string =
+  let rIdx = int(soa.cold.repoIndices[idx])
+  let repoOffset = int(repoOffsets[rIdx])
+  let repoLen = int(repoLens[int(soa.cold.repoIndices[idx])])
+  if repoOffset + repoLen <= repoArena.len:
     result = newStringOfCap(repoLen)
     result.setLen(repoLen)
-    copyMem(addr result[0], unsafeAddr state.repoArena[repoOffset], repoLen)
+    copyMem(addr result[0], unsafeAddr repoArena[repoOffset], repoLen)
     return result
   return ""
 
-func getPkgId*(state: AppState, idx: int32): string {.noSideEffect.} =
-  state.getRepo(int(idx)) & "/" & state.getName(int(idx))
+func getPkgId*(
+    soa: PackageSOA,
+    textArena: openArray[char],
+    repoOffsets: openArray[uint16],
+    repoLens: openArray[uint8],
+    repoArena: openArray[char],
+    idx: int32,
+): string {.noSideEffect.} =
+  getRepo(soa, repoOffsets, repoLens, repoArena, int(idx)) & "/" &
+    getName(soa, textArena, int(idx))
 
-func isSelected*(state: AppState, idx: int): bool {.inline, noSideEffect.} =
+func isSelected*(selectionBits: openArray[uint64], idx: int): bool {.inline, noSideEffect.} =
   let wordIdx = idx div 64
-  if wordIdx >= state.selectionBits.len:
+  if wordIdx >= selectionBits.len:
     return false
-  testBit(state.selectionBits[wordIdx], idx mod 64)
+  testBit(selectionBits[wordIdx], idx mod 64)
 
 proc toggleSelection*(state: var AppState, idx: int) =
   let wordIdx = idx div 64
@@ -104,9 +139,9 @@ proc toggleSelection*(state: var AppState, idx: int) =
   state.selectionBits[wordIdx] =
     state.selectionBits[wordIdx] xor (1'u64 shl (idx mod 64))
 
-func getSelectedCount*(state: AppState): int {.noSideEffect.} =
+func getSelectedCount*(selectionBits: openArray[uint64]): int {.noSideEffect.} =
   result = 0
-  for word in state.selectionBits:
+  for word in selectionBits:
     result += countSetBits(word)
 
 proc saveCurrentToDB*(state: var AppState) =
