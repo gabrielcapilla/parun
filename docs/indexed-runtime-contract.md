@@ -32,19 +32,17 @@ This document is the Phase 1 ownership contract for the future indexed runtime.
 - [getRepo](/home/human/Git/Public/parun/src/core/state.nim#L91)
 - [getPkgId](/home/human/Git/Public/parun/src/core/state.nim#L105)
 - [renderDetails](/home/human/Git/Public/parun/src/ui/renderer.nim#L124) because it wraps and rewrites detail text into heap strings
-- [MsgError handling](/home/human/Git/Public/parun/src/core/systems/update_system.nim#L205) because it builds display strings for the UI
+- [MsgError handling](/home/human/Git/Public/parun/src/core/update_system.nim#L205) because it builds display strings for the UI
 
 ## Existing Code Paths Already Aligned With The Future Direction
 
-- [filterIndices](/home/human/Git/Public/parun/src/core/systems/search_system.nim#L4) reads package names from the arena through pointer plus length access rather than allocating names per candidate.
-- [withBinaryCache](/home/human/Git/Public/parun/src/pkgs/cache.nim#L169) already demonstrates a memory-mapped, pointer-based iteration pattern suitable for immutable indexes.
-- [validateSourceIndex](/home/human/Git/Public/parun/src/storage/indexes.nim) now validates directly over a mapped file instead of heap-loading the full artifact.
-- [manager.nim](/home/human/Git/Public/parun/src/pkgs/manager.nim) now keeps the worker cold until details or diagnostics are actually requested.
+- [filterIndices](/home/human/Git/Public/parun/src/core/search_system.nim#L4) reads package names from the arena through pointer plus length access rather than allocating names per candidate.
+- [withBinaryCache](/home/human/Git/Public/parun/src/plugins/cache.nim#L169) already demonstrates a memory-mapped, pointer-based iteration pattern suitable for immutable indexes.
+- [validateSourceIndex](/home/human/Git/Public/parun/src/storage/source_index_validation.nim) now validates directly over a mapped file instead of heap-loading the full artifact.
+- [manager.nim](/home/human/Git/Public/parun/src/plugins/manager.nim) now keeps the worker cold until details or diagnostics are actually requested.
 
 ## Phase 1 Diagnostics Contract
 
-- `bash tools/measure_baseline.sh` is the release-build baseline harness.
-- `bash tools/byte_accounting.sh` emits the current ownership report.
-- `nimble verifyRuntime` is the regression gate for idle memory and visible source-switch latency.
-- Both commands must write machine-readable artifacts under `tools/output/`.
-- Any future architecture claim about memory reduction or zero visible latency must cite one of those artifacts or a newer compatible artifact.
+- Public release gate is `nimble release` using deterministic compiler flags.
+- Runtime budgets are still mandatory, but raw harness scripts/artifacts are maintained out of tree.
+- Any future architecture claim about memory reduction or zero visible latency must cite reproducible artifacts, even when those artifacts are maintained privately.

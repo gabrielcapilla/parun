@@ -21,16 +21,25 @@ curl -fsSL gabrielcapilla.github.io/install | bash -s parun
 **Or install with Nimble (requires Nim):**
 
 ```bash
-nimble install https://github.com/gabrielcapilla/parun.git@#head
+nimble install parun
 ```
 
 ## Usage
 
 ```bash
 parun              # Start in default mode
-parun --nimble     # Start in Nimble mode
+parun --nim        # Nimble-only source mode (alias: --nimble)
+parun --aur        # AUR-only source mode
+parun --aur --pacman --nimble  # Explicitly enable all sources
 parun --noinfo     # Hide details panel
 ```
+
+Default `parun` behavior is unchanged: Local (pacman) is the default view and
+you can switch on demand with `aur/` and `nim/` prefixes.
+
+When any of `--pacman`, `--aur`, or `--nimble` is passed, those flags become
+an explicit source filter and unprefixed search shows the combined selected
+sources by default. `--pacman` is not implied by `--aur`.
 
 ### Navigation
 
@@ -56,23 +65,21 @@ Type prefixes to switch between package sources:
 
 ## Runtime Engineering
 
-Parun now uses immutable memory-mapped source indexes for local, AUR, and Nimble search. The interactive path keeps package corpora out of mutable heap state and only promotes owned strings at explicit cold boundaries such as details and package transactions.
+Parun uses immutable memory-mapped source indexes for local, AUR, and Nimble search. The interactive path keeps package corpora out of mutable heap state and only promotes owned strings at explicit cold boundaries such as details and package transactions.
 
-Key maintenance commands:
-
-```bash
-nimble buildIndexes
-nimble measureBaseline
-nimble byteAccounting
-nimble verifyRuntime
-```
-
-Current enforced budgets for the indexed runtime:
+Current target budgets for the indexed runtime:
 
 - idle `RSS <= 12 MiB`
 - idle `PSS <= 8 MiB`
 - idle `Private_Dirty <= 6 MiB`
 - visible `aur/` and `nim/` switch latency `<= 25 ms`
+
+Release tasks:
+
+```bash
+nimble release       # deterministic public build
+nimble releaseNative # host-optimized local build (not for redistribution)
+```
 
 ---
 

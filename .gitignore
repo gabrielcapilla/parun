@@ -18,6 +18,13 @@ nimble.develop
 
 # Binary
 parun
+tools/
+log.md
+.minerva/
+dist/
+*.tar.gz
+*.zip
+docs/how-i-use-obsidian.md
 
 # Editor files
 *~

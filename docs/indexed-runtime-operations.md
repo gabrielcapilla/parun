@@ -16,16 +16,14 @@ This document records the operational contract for Parun's low-RAM indexed runti
 
 ## Rebuild Commands
 
-- `nimble buildIndexes`
-- `bash tools/build_indexes.sh --output-dir="$HOME/.cache/parun/indexes"`
+- `parun` rebuilds missing/invalid indexes automatically at runtime.
+- `nimble release` validates the public deterministic build contract.
 
 ## Validation Commands
 
-- `nimble measureBaseline`
-- `nimble byteAccounting`
-- `nimble verifyRuntime`
-
-`verifyRuntime` is the enforcement gate. It currently fails when any of these budgets are exceeded on the measured release binary:
+- Runtime budgets are validated in maintainer-private harnesses that are intentionally kept out of the public repository.
+- Public release gate is successful `nimble release` plus interactive smoke checks on source switching and details rendering.
+- Target budgets for release verification:
 
 - idle `RSS > 12288 KiB`
 - idle `PSS > 8192 KiB`
@@ -43,7 +41,5 @@ This document records the operational contract for Parun's low-RAM indexed runti
 
 ## Measurement Artifacts
 
-- `tools/output/baseline.json`
-- `tools/output/byte_accounting.json`
-
-Any future change that claims a memory or latency win must update one of these artifacts or provide a compatible successor artifact with the same procfs metrics.
+- Public repository keeps contracts and runtime code only.
+- Raw benchmark and accounting artifacts remain private maintainer data and are not committed.
