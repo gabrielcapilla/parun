@@ -1,7 +1,9 @@
 ## Bridge between the UI and the background worker thread.
-import std/[os, osproc, strutils]
+import std/[osproc, strutils]
 import ../core/types
 import worker_types, worker
+import registry
+import contracts
 
 const
   ValidPkgNameChars = {'a' .. 'z', 'A' .. 'Z', '0' .. '9', '-', '.', '+', '_', '@'}
@@ -126,12 +128,17 @@ proc initPackageManager*() =
     )
     dispatchInstalled = true
 
-  if findExe("paru").len > 0:
-    activeTool = ManParu
-  elif findExe("yay").len > 0:
-    activeTool = ManYay
-  else:
-    activeTool = ManPacman
+  activeTool = detectSystemPlugin()
+  let activeDef = getToolDef(activeTool)
+  if activeDef.source != SourceSystem:
+    raise newException(
+      ValueError, "detected active system plugin has invalid source: " & activeDef.key
+    )
+  enforceCapabilities(
+    activeDef,
+    {capSearch, capInstall, capUninstall, capDetails, capSystemCatalog, capAurCatalog},
+    "system plugin init",
+  )
 
 proc shutdownPackageManager*() =
   ## Stops the worker thread and closes channels.
@@ -156,13 +163,17 @@ proc pollWorkerMessages*(messages: var seq[Msg]) =
 
 func buildCmd*(tool: PkgManagerType, op: string, targets: seq[string]): string =
   let def = getToolDef(tool)
-  let prefix = if def.sudo and tool != ManNimble: "sudo " else: ""
+  let prefix = if def.sudo: "sudo " else: ""
   result = prefix & def.bin & op & targets.join(" ")
 
 proc runTransaction*(tool: PkgManagerType, targets: seq[string], install: bool): int =
   if targets.len == 0:
     return 0
   let def = getToolDef(tool)
+  if install:
+    enforceCapabilities(def, {capInstall}, "install transaction")
+  else:
+    enforceCapabilities(def, {capUninstall}, "uninstall transaction")
   let op = if install: def.installCmd else: def.uninstallCmd
   let cmd = buildCmd(tool, op, targets)
   return execCmd(cmd)
@@ -173,7 +184,7 @@ proc installPackages*(names: seq[string], source: DataSource): int =
     if not isValidPackageName(name):
       stderr.writeLine("Error: Invalid package name: ", name)
       return 1
-  let tool = if source == SourceNimble: ManNimble else: activeTool
+  let tool = pluginForSource(source, activeTool)
   return runTransaction(tool, names, true)
 
 proc uninstallPackages*(names: seq[string], source: DataSource): int =
@@ -182,5 +193,5 @@ proc uninstallPackages*(names: seq[string], source: DataSource): int =
     if not isValidPackageName(name):
       stderr.writeLine("Error: Invalid package name: ", name)
       return 1
-  let tool = if source == SourceNimble: ManNimble else: activeTool
+  let tool = pluginForSource(source, activeTool)
   return runTransaction(tool, names, false)

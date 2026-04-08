@@ -107,11 +107,21 @@ proc renderUi*(
       0
   let detailTextW = max(0, detailTotalW - 2)
   let view = state.activeView
+  const ColdPredecodeLookaheadRows = 3
+
+  if state.visibleCount() > 0:
+    let predecodeStart = max(0, state.scroll - ColdPredecodeLookaheadRows)
+    let predecodeEnd = min(
+      state.visibleCount() - 1, state.scroll + listH - 1 + ColdPredecodeLookaheadRows
+    )
+    for rowIdx in predecodeStart .. predecodeEnd:
+      predecodeColdFields(view, int(state.visibleIdxAt(rowIdx)))
 
   for r in 0 ..< listH:
     let rowIdx = state.scroll + (listH - 1 - r)
-    if rowIdx >= 0 and rowIdx < state.visibleIndices.len:
-      let realIdx = state.visibleIndices[rowIdx]
+    if rowIdx >= 0 and rowIdx < state.visibleCount():
+      let realIdx = state.visibleIdxAt(rowIdx)
+      state.perf.coldRowRenders.inc()
       appendRow(
         buffer,
         view,
@@ -133,7 +143,7 @@ proc renderUi*(
   buffer.add(Reset & "\n")
   let cx = renderStatusBar(
     buffer,
-    state.visibleIndices.len,
+    state.visibleCount(),
     packageCount(view),
     state.selectionBits,
     state.viewingSelection,

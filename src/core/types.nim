@@ -6,17 +6,21 @@
 ##    from rarely accessed data (details/rendering).
 ## 3. **Arenas:** Using contiguous buffers for strings to avoid fragmentation and GC.
 
-import std/[tables, monotimes, strutils]
+import std/[monotimes, strutils]
 import ../utils/memory_accounting
 import ../storage/indexes
 
 const
   ## Max number of package details cached in RAM.
-  DetailsCacheLimit* = 64
+  DetailsCacheLimit* = 8
   ## Approximate UI-side byte budget for cached detail text.
-  DetailsCacheByteBudget* = 512 * 1024
+  DetailsCacheByteBudget* = 128 * 1024
+  ## Hard cap for a single details payload kept in memory.
+  MaxDetailPayloadBytes* = 16 * 1024
   ## Delay before requesting details for a newly focused package.
-  DetailsRequestDebounceMs* = 120
+  DetailsRequestDebounceMs* = 0
+  ## Compression block size for cold details payload storage.
+  DetailCacheBlockBytes* = 256
   ## Buffer size for thread communication batches.
   # BatchSize moved to worker_types.nim
 
@@ -90,6 +94,7 @@ type
     SlotSystem
     SlotAur
     SlotNimble
+    SlotMerged
 
   MsgKind* = enum
     ## Message types for the Actor system (Threading).
@@ -134,7 +139,7 @@ type
   RequestLoadProc* = proc(id: int) {.gcsafe.}
   RequestSearchProc* = proc(query: string, id: int) {.gcsafe.}
   RequestDetailsProc* = proc(
-      idx: int32, name, repo: string, source: DataSource, slot: SourceSlot
+    idx: int32, name, repo: string, source: DataSource, slot: SourceSlot
   ) {.gcsafe.}
 
 var
@@ -255,6 +260,34 @@ type
     ## Flag to avoid unnecessary reloads.
     isLoaded*: bool
 
+  DetailCacheEntry* = object
+    key*: int32
+    start*: uint32
+    encodedLen*: uint16
+    rawLen*: uint16
+    valid*: bool
+
+  DetailCache* = object
+    arena*: seq[char]
+    arenaUsed*: int
+    entries*: array[DetailsCacheLimit, DetailCacheEntry]
+    count*: int
+    nextEvict*: int
+
+  PerfCounters* = object ## Hot-path counters (search/filtering).
+    hotFilterCalls*: uint64
+    hotFilterCandidates*: uint64
+    hotScoreCalls*: uint64
+    hotInstalledChecks*: uint64
+    hotBucketLookups*: uint64
+    ## Cold-path counters (render/details).
+    coldRowRenders*: uint64
+    coldDetailWraps*: uint64
+    coldDetailLines*: uint64
+    coldDetailCacheHits*: uint64
+    coldDetailCacheMisses*: uint64
+    coldDetailRequests*: uint64
+
   AppState* = object
     ## "God Object" containing all mutable application state.
     ##
@@ -281,12 +314,16 @@ type
 
     # Search and UI State
     #
-    ## Current filtered results.
+    ## Current filtered results (materialized only when not in identity mode).
     visibleIndices*: seq[int32]
+    ## True when visible list is an implicit identity mapping [0..N).
+    visibleAll*: bool
+    ## Number of visible rows when `visibleAll` is true.
+    visibleAllCount*: int32
     ## Bitset for multi-selection (64 pkgs per int).
     selectionBits*: seq[uint64]
-    ## LRU cache for details.
-    detailsCache*: Table[int32, string]
+    ## Bounded details cache with fixed metadata and arena-backed payload.
+    detailsCache*: DetailCache
 
     ## Visual cursor position (index in visibleIndices).
     cursor*: int
@@ -326,9 +363,19 @@ type
     ## Mode to return to after exiting AUR/Nimble.
     baseSearchMode*: SearchMode
     baseDataSource*: DataSource
+    ## Runtime slot to return to when no search prefix is active.
+    baseSlot*: SourceSlot
+    ## True when source flags were passed explicitly on startup.
+    explicitSourceSelection*: bool
+    ## Sources enabled by CLI flags.
+    enabledSlots*: set[SourceSlot]
+    ## Runtime directory where immutable indexes are stored.
+    runtimeIndexDir*: string
     activeSlot*: SourceSlot
     pendingDetailSlot*: SourceSlot
     detailRequestInFlight*: bool
+    ## Runtime perf counters used by automated harness assertions.
+    perf*: PerfCounters
 
     # Packed flags
     ## Filter: View only selected?
@@ -367,12 +414,10 @@ func getEffectiveQuery*(buffer: string): string {.noSideEffect.} =
 
 proc slotToIndexKind*(slot: SourceSlot): IndexedSourceKind {.inline.} =
   case slot
-  of SlotSystem:
-    iskSystem
-  of SlotAur:
-    iskAur
-  of SlotNimble:
-    iskNimble
+  of SlotSystem: iskSystem
+  of SlotAur: iskAur
+  of SlotNimble: iskNimble
+  of SlotMerged: iskSystem
 
 proc sourceSlot*(source: DataSource, mode: SearchMode): SourceSlot {.inline.} =
   case source

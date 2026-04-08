@@ -1,18 +1,92 @@
 ## Initializes the terminal, package manager, and main event loop.
 
-import std/[posix, tables, terminal, selectors, strutils, parseopt, bitops, monotimes, times]
+import
+  std/
+    [json, os, posix, terminal, selectors, strutils, parseopt, bitops, monotimes, times]
 import ui/[tui, keyboard, terminal as term]
 import core/[types, state, engine]
-import pkgs/manager
-import storage/indexes
+import plugins/manager
+import storage/[indexes, index_builder]
+import utils/version
 
-const ParunVersion* = "0.5.3"
+const AllSourceKinds = {iskSystem, iskAur, iskNimble}
+
+when defined(linux):
+  proc malloc_trim(pad: csize_t): cint {.importc, header: "<malloc.h>".}
+
+proc inferSourceFromRepo(repo: string): DataSource {.inline.} =
+  if repo == "nimble": SourceNimble else: SourceSystem
+
+proc printHelp() =
+  echo """
+Usage: parun [options]
+
+Options:
+  -h, --help                 Show this help and exit
+  -v, --version              Show version and exit
+  -n, --noinfo               Start with details panel hidden
+      --perf-out=PATH        Write runtime perf counters JSON on graceful exit
+      --pacman               Enable local pacman source
+      --aur                  Enable AUR source
+      --nimble, --nim        Enable Nimble source
+
+Source Selection:
+  - `parun` keeps current behavior: Local is default, and `aur/` or `nim/`
+    prefixes switch source on demand.
+  - If any of `--pacman`, `--aur`, `--nimble` are passed, they become an
+    explicit source filter.
+  - In explicit filter mode, unprefixed search shows the combined selected
+    sources by default.
+  - Default source priority with explicit filters: pacman > aur > nimble.
+  - `--pacman` is not implied by `--aur`; use both to enable both.
+
+Examples:
+  parun
+  parun --nim
+  parun --aur --pacman --nimble --noinfo
+"""
+
+proc writePerfSnapshot(path: string, state: AppState) =
+  if path.len == 0:
+    return
+  let decode = snapshotColdDecodeStats()
+  let dir = parentDir(path)
+  if dir.len > 0:
+    createDir(dir)
+  let payload =
+    %*{
+      "hot_filter_calls": state.perf.hotFilterCalls,
+      "hot_filter_candidates": state.perf.hotFilterCandidates,
+      "hot_score_calls": state.perf.hotScoreCalls,
+      "hot_installed_checks": state.perf.hotInstalledChecks,
+      "hot_bucket_lookups": state.perf.hotBucketLookups,
+      "cold_row_renders": state.perf.coldRowRenders,
+      "cold_detail_wraps": state.perf.coldDetailWraps,
+      "cold_detail_lines": state.perf.coldDetailLines,
+      "cold_detail_cache_hits": state.perf.coldDetailCacheHits,
+      "cold_detail_cache_misses": state.perf.coldDetailCacheMisses,
+      "cold_detail_requests": state.perf.coldDetailRequests,
+      "cold_decode_requests": decode.requests,
+      "cold_decode_hits": decode.hits,
+      "cold_decode_misses": decode.misses,
+      "cold_decode_blocks": decode.decodedBlocks,
+      "cold_decode_bytes": decode.decodedBytes,
+    }
+  writeFile(path, pretty(payload))
 
 proc main() =
   var
-    startMode = ModeLocal
     startShowDetails = true
-    startNimble = false
+    explicitSources = false
+    usePacman = false
+    useAur = false
+    useNimble = false
+    runInternalRefresh = false
+    internalRefreshMergedOnly = false
+    internalIndexDir = ""
+    internalRefreshSources = ""
+    internalRefreshLock = ""
+    perfOutPath = ""
 
   # CLI Argument Parsing
   var p = initOptParser()
@@ -21,14 +95,34 @@ proc main() =
     of cmdLongOption, cmdShortOption:
       case key
       of "version", "v":
-        echo "parun version: ", ParunVersion
+        echo "parun: ", getVersion()
+        quit(0)
+      of "help", "h":
+        printHelp()
         quit(0)
       of "noinfo", "n":
         startShowDetails = false
-      of "nimble", "nim":
-        startNimble = true
-      of "aur":
-        startMode = ModeAUR
+      of "pacman", "p":
+        explicitSources = true
+        usePacman = true
+      of "aur", "a":
+        explicitSources = true
+        useAur = true
+      of "nimble", "nim", "m":
+        explicitSources = true
+        useNimble = true
+      of RuntimeRefreshFlag.strip(chars = {'-'}):
+        runInternalRefresh = true
+      of "perf-out":
+        perfOutPath = val
+      of RuntimeRefreshMergedOnlyFlag.strip(chars = {'-'}):
+        internalRefreshMergedOnly = true
+      of RuntimeIndexDirFlag.strip(chars = {'-'}):
+        internalIndexDir = val
+      of RuntimeRefreshSourcesFlag.strip(chars = {'-'}):
+        internalRefreshSources = val
+      of RuntimeRefreshLockFlag.strip(chars = {'-'}):
+        internalRefreshLock = val
       else:
         stderr.writeLine("parun: unknown option -- '", key, "'")
         stderr.writeLine("Try 'parun --help' for more information.")
@@ -40,11 +134,62 @@ proc main() =
         stderr.writeLine("Try 'parun --help' for more information.")
         quit(1)
 
+  if runInternalRefresh:
+    let refreshDir =
+      if internalIndexDir.len > 0:
+        internalIndexDir
+      else:
+        defaultRuntimeIndexDir()
+    let enabled =
+      if internalRefreshSources.len > 0:
+        parseEnabledSources(internalRefreshSources)
+      else:
+        AllSourceKinds
+    quit(
+      runInternalIndexRefresh(
+        refreshDir, enabled, internalRefreshLock, internalRefreshMergedOnly
+      )
+    )
+
+  var enabledSlots: set[SourceSlot] = {}
+  if explicitSources:
+    if usePacman:
+      enabledSlots.incl(SlotSystem)
+    if useAur:
+      enabledSlots.incl(SlotAur)
+    if useNimble:
+      enabledSlots.incl(SlotNimble)
+  else:
+    enabledSlots = {SlotSystem, SlotAur, SlotNimble}
+
+  if enabledSlots.len == 0:
+    stderr.writeLine(
+      "parun: no package source selected; use --pacman, --aur, or --nimble."
+    )
+    stderr.writeLine("Try 'parun --help' for more information.")
+    quit(1)
+
+  let initialSlot =
+    if SlotSystem in enabledSlots:
+      SlotSystem
+    elif SlotAur in enabledSlots:
+      SlotAur
+    else:
+      SlotNimble
+
   var origTerm = initTerminal()
   initPackageManager()
 
-  var appState = newState(startMode, startShowDetails, startNimble)
+  var appState = newState(
+    initialSlot,
+    startShowDetails,
+    enabledSlots,
+    explicitSourceSelection = explicitSources,
+  )
   appState.prepareIndexedSources()
+  resetColdDecodeStats()
+  when defined(linux):
+    discard malloc_trim(0)
 
   # Async I/O Setup
   let selector = newSelector[int]()
@@ -57,9 +202,10 @@ proc main() =
     restoreTerminal(origTerm)
     shutdownPackageManager()
 
-  var renderBuffer = newStringOfCap(64 * 1024)
-  var transactionTargets = newSeqOfCap[string](16)
-  var pendingMsgs = newSeqOfCap[Msg](16)
+  var renderBuffer = newStringOfCap(8 * 1024)
+  var systemTargets = newSeqOfCap[string](8)
+  var nimbleTargets = newSeqOfCap[string](8)
+  var pendingMsgs = newSeqOfCap[Msg](8)
 
   # Main Loop
   while not appState.shouldQuit:
@@ -69,7 +215,8 @@ proc main() =
 
     # Install/Uninstall Management
     if appState.shouldInstall or appState.shouldUninstall:
-      transactionTargets.setLen(0)
+      systemTargets.setLen(0)
+      nimbleTargets.setLen(0)
       let selCount = getSelectedCount(appState.selectionBits)
       let totalPkgs = currentPackageCount(appState)
       let view = appState.activeView
@@ -83,31 +230,49 @@ proc main() =
               let realIdx = i * 64 + bit
               if realIdx < totalPkgs:
                 let name = copyName(view, realIdx)
+                let repo = copyRepo(view, realIdx)
+                let source = inferSourceFromRepo(repo)
                 if appState.shouldInstall:
-                  if appState.dataSource == SourceNimble:
-                    transactionTargets.add(name)
+                  if source == SourceNimble:
+                    nimbleTargets.add(name)
                   else:
-                    transactionTargets.add(copyRepo(view, realIdx) & "/" & name)
+                    systemTargets.add(repo & "/" & name)
                 else:
-                  transactionTargets.add(name)
-      elif appState.visibleIndices.len > 0:
-        let idx = int(appState.visibleIndices[appState.cursor])
+                  if source == SourceNimble:
+                    nimbleTargets.add(name)
+                  else:
+                    systemTargets.add(name)
+      elif appState.visibleCount() > 0:
+        let idx = int(appState.visibleIdxAt(appState.cursor))
         let name = copyName(view, idx)
+        let repo = copyRepo(view, idx)
+        let source = inferSourceFromRepo(repo)
         if appState.shouldInstall:
-          if appState.dataSource == SourceNimble:
-            transactionTargets.add(name)
+          if source == SourceNimble:
+            nimbleTargets.add(name)
           else:
-            transactionTargets.add(copyRepo(view, idx) & "/" & name)
+            systemTargets.add(repo & "/" & name)
         else:
-          transactionTargets.add(name)
-
-      if transactionTargets.len > 0:
-        restoreTerminal(origTerm)
-        let code =
-          if appState.shouldInstall:
-            installPackages(transactionTargets, appState.dataSource)
+          if source == SourceNimble:
+            nimbleTargets.add(name)
           else:
-            uninstallPackages(transactionTargets, appState.dataSource)
+            systemTargets.add(name)
+
+      if systemTargets.len + nimbleTargets.len > 0:
+        restoreTerminal(origTerm)
+        var code = 0
+        if systemTargets.len > 0:
+          code =
+            if appState.shouldInstall:
+              installPackages(systemTargets, SourceSystem)
+            else:
+              uninstallPackages(systemTargets, SourceSystem)
+        if code == 0 and nimbleTargets.len > 0:
+          code =
+            if appState.shouldInstall:
+              installPackages(nimbleTargets, SourceNimble)
+            else:
+              uninstallPackages(nimbleTargets, SourceNimble)
         quit(code)
       else:
         appState.shouldInstall = false
@@ -132,27 +297,30 @@ proc main() =
         discard
 
     # Request details only for the stable current selection.
-    if appState.showDetails and appState.visibleIndices.len > 0:
+    if appState.showDetails and appState.visibleCount() > 0:
       let view = appState.activeView
-      let idx = appState.visibleIndices[appState.cursor]
-      if not appState.detailsCache.hasKey(idx):
-        if appState.pendingDetailIdx != idx or appState.pendingDetailSlot != appState.activeSlot:
+      let idx = appState.visibleIdxAt(appState.cursor)
+      if not detailCacheHas(appState.detailsCache, idx):
+        var shouldRequestNow = false
+        if appState.pendingDetailIdx != idx or
+            appState.pendingDetailSlot != appState.activeSlot:
           appState.pendingDetailIdx = idx
           appState.pendingDetailSlot = appState.activeSlot
           appState.detailTargetSince = getMonoTime()
           appState.detailRequestInFlight = false
+          shouldRequestNow = DetailsRequestDebounceMs <= 0
         elif not appState.detailRequestInFlight and
             (getMonoTime() - appState.detailTargetSince).inMilliseconds() >=
             DetailsRequestDebounceMs and appState.pendingDetailIdx == idx:
+          shouldRequestNow = true
+
+        if shouldRequestNow and not appState.detailRequestInFlight:
           let i = int(idx)
-          requestDetails(
-            idx,
-            copyName(view, i),
-            copyRepo(view, i),
-            appState.dataSource,
-            appState.activeSlot,
-          )
+          let repo = copyRepo(view, i)
+          let source = inferSourceFromRepo(repo)
+          requestDetails(idx, copyName(view, i), repo, source, appState.activeSlot)
           appState.detailRequestInFlight = true
+          appState.perf.coldDetailRequests.inc()
       else:
         appState.pendingDetailIdx = -1
         appState.detailRequestInFlight = false
@@ -185,6 +353,8 @@ proc main() =
 
       if appState.shouldQuit:
         break
+
+  writePerfSnapshot(perfOutPath, appState)
 
 when isMainModule:
   main()

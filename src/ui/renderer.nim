@@ -1,7 +1,7 @@
 ## UI component rendering.
 ## Split from tui.nim to keep modules manageable.
 
-import std/[strutils, tables]
+import std/[monotimes, strutils, times]
 import ../core/[types, state]
 import ../storage/indexes
 import ../utils/utils
@@ -123,6 +123,15 @@ proc appendRow*(
   if isCursor:
     buffer.add(Reset)
 
+proc loadingIndicatorLine(width: int, row: int, phase: int): string =
+  discard phase
+  if width <= 0:
+    return ""
+
+  if row == 0:
+    return AnsiDim & "..." & AnsiReset
+  return ""
+
 proc renderDetails*(
     buffer: var string, state: var AppState, r, listH, detailTextW: int
 ) =
@@ -147,21 +156,29 @@ proc renderDetails*(
     buffer.add(Reset)
     let contentRowIndex = r - 1
     var textContent = ""
-    if state.visibleIndices.len > 0:
-      let curIdx = state.visibleIndices[state.cursor]
-      if state.detailsCache.hasKey(curIdx):
+    if state.visibleCount() > 0:
+      let curIdx = state.visibleIdxAt(state.cursor)
+      if detailCacheHas(state.detailsCache, curIdx):
+        if contentRowIndex == 0:
+          state.perf.coldDetailCacheHits.inc()
         # Update wrapping cache if needed
         if state.lastDetailIdx != curIdx or state.lastDetailWidth != detailTextW:
-          let rawContent = state.detailsCache[curIdx]
+          let rawContent = detailCacheGet(state.detailsCache, curIdx)
           state.wrappedDetails = wrapText(rawContent, detailTextW)
           state.lastDetailIdx = curIdx
           state.lastDetailWidth = detailTextW
+          state.perf.coldDetailWraps.inc()
 
         let effectiveIdx = contentRowIndex + state.detailScroll
         if effectiveIdx < state.wrappedDetails.len:
           textContent = state.wrappedDetails[effectiveIdx].replace("\t", "  ")
-      elif contentRowIndex == 0:
-        textContent = "..."
+          state.perf.coldDetailLines.inc()
+      else:
+        if contentRowIndex == 0:
+          state.perf.coldDetailCacheMisses.inc()
+        let loadingMs = int((getMonoTime() - state.detailTargetSince).inMilliseconds())
+        let phase = loadingMs div 80
+        textContent = loadingIndicatorLine(detailTextW, contentRowIndex, phase)
 
     let visLen = visibleWidth(textContent)
     if visLen > detailTextW:

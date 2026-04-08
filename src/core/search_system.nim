@@ -1,14 +1,21 @@
 import std/[strutils, bitops]
-import ../types
-import ../../storage/indexes
-import ../../utils/simd
+import types
+import ../storage/indexes
+import ../utils/simd
 
 proc filterIndices*(
     query: string,
     view: ptr SourceIndexView,
     results: var seq[int32],
+    visibleAll: var bool,
+    visibleAllCount: var int32,
+    perf: ptr PerfCounters = nil,
 ) =
   ## Filtering System (Hot Path).
+  if not perf.isNil:
+    perf[].hotFilterCalls.inc()
+  visibleAll = false
+  visibleAllCount = 0
   let count = results.len
   results.setLen(0)
   results.setLen(count)
@@ -22,12 +29,14 @@ proc filterIndices*(
     if filterInstalled:
       results.setLen(0)
       for i in 0 ..< totalPkgs:
+        if not perf.isNil:
+          perf[].hotInstalledChecks.inc()
         if isInstalled(view, i):
           results.add(int32(i))
     else:
-      results.setLen(totalPkgs)
-      for i in 0 ..< totalPkgs:
-        results[i] = int32(i)
+      results = @[]
+      visibleAll = true
+      visibleAllCount = int32(totalPkgs)
     return
 
   let ctx = prepareSearchContext(cleanQuery)
@@ -51,17 +60,25 @@ proc filterIndices*(
   for candidatePos in candidateRange:
     if buf.count >= 2000:
       break
+    if not perf.isNil:
+      perf[].hotFilterCandidates.inc()
 
     let i =
       if hasBucket:
+        if not perf.isNil:
+          perf[].hotBucketLookups.inc()
         bucketIdAt(view, candidatePos)
       else:
         candidatePos
 
     if filterInstalled and not isInstalled(view, i):
+      if not perf.isNil:
+        perf[].hotInstalledChecks.inc()
       continue
 
     let namePtr = lowerNamePtr(view, i)
+    if not perf.isNil:
+      perf[].hotScoreCalls.inc()
     let s = scorePackageSimd(namePtr, getLowerLen(view, i), ctx)
     if s > 0:
       buf.indices[buf.count] = int32(i)

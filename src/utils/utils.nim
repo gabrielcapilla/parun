@@ -3,6 +3,8 @@ import std/[unicode, strutils]
 func wrapText*(text: string, maxWidth: int): seq[string] {.noSideEffect.} =
   ## Wraps text to fit within maxWidth characters.
   ## Preserves existing newlines and handles word boundaries.
+  if maxWidth <= 0:
+    return text.split('\n')
   result = newSeqOfCap[string](text.len div (maxWidth + 1) + 1)
   for line in text.split('\n'):
     if line.len <= maxWidth:
@@ -14,17 +16,16 @@ func wrapText*(text: string, maxWidth: int): seq[string] {.noSideEffect.} =
     var currentLen = 0
 
     for word in line.split(' '):
-      if word.len == 0: continue
-      let wordWithSpace =
-        if currentLen > 0:
-          " " & word
-        else:
-          word
-      let newLen = currentLen + wordWithSpace.len
+      if word.len == 0:
+        continue
+      let separatorLen = (if currentLen > 0: 1 else: 0)
+      let newLen = currentLen + separatorLen + word.len
 
       if newLen <= maxWidth:
         # Word fits on current line
-        currentLine.add(wordWithSpace)
+        if separatorLen == 1:
+          currentLine.add(' ')
+        currentLine.add(word)
         currentLen = newLen
       elif word.len <= maxWidth:
         # Word doesn't fit but fits on new line
@@ -32,15 +33,6 @@ func wrapText*(text: string, maxWidth: int): seq[string] {.noSideEffect.} =
           result.add(currentLine)
           currentLine = word
           currentLen = word.len
-        else:
-          # Single word too long, force wrap
-          result.add(word[0 ..< maxWidth])
-          if word.len > maxWidth:
-            currentLine = word[maxWidth ..^ 1]
-            currentLen = currentLine.len
-          else:
-            currentLine = ""
-            currentLen = 0
       else:
         # Word is longer than maxWidth, need to split it
         if currentLine.len > 0:
@@ -70,8 +62,6 @@ proc visibleWidth*(s: string): int =
           inc i
         inc i
     else:
-      # Use _ for unused variables
-      let _ = s.runeAt(i)
       result += 1
       i += s.runeLenAt(i)
 
@@ -90,7 +80,6 @@ proc truncate*(s: string, maxW: int): string =
         inc i
       result.add(s[start ..< i])
     else:
-      let _ = s.runeAt(i)
       let rl = s.runeLenAt(i)
       if w + 1 <= maxW:
         result.add(s[i ..< i + rl])

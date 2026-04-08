@@ -101,18 +101,18 @@ func moveCursorWordRight*(state: var AppState) =
 proc handleInput*(state: var AppState, k: char, listHeight: int) =
   case k
   of KeyUp:
-    if state.visibleIndices.len > 0:
-      state.cursor = min(state.visibleIndices.len - 1, state.cursor + 1)
+    if state.visibleCount() > 0:
+      state.cursor = min(state.visibleCount() - 1, state.cursor + 1)
       state.detailScroll = 0
   of KeyDown, KeyCtrlJ:
-    if state.visibleIndices.len > 0:
+    if state.visibleCount() > 0:
       state.cursor = max(0, state.cursor - 1)
       state.detailScroll = 0
   of KeyPageUp:
-    if state.visibleIndices.len > 0:
-      state.cursor = min(state.visibleIndices.len - 1, state.cursor + listHeight)
+    if state.visibleCount() > 0:
+      state.cursor = min(state.visibleCount() - 1, state.cursor + listHeight)
   of KeyPageDown:
-    if state.visibleIndices.len > 0:
+    if state.visibleCount() > 0:
       state.cursor = max(0, state.cursor - listHeight)
   of KeyBack, KeyBackspace:
     if state.viewingSelection:
@@ -146,8 +146,8 @@ proc handleInput*(state: var AppState, k: char, listHeight: int) =
     if k.ord >= 32 and k.ord <= 126:
       insertChar(state, k)
 
-  if state.visibleIndices.len > 0:
-    state.cursor = clamp(state.cursor, 0, state.visibleIndices.len - 1)
+  if state.visibleCount() > 0:
+    state.cursor = clamp(state.cursor, 0, state.visibleCount() - 1)
     if state.cursor < state.scroll:
       state.scroll = state.cursor
     elif state.cursor >= state.scroll + listHeight:

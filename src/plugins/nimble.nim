@@ -31,7 +31,8 @@ func parseNimbleInfo*(
   for line in raw.split('\n'):
     # Efficiently skip empty lines or comments without allocation
     var first = 0
-    while first < line.len and line[first] in {' ', '\t', '\r'}: inc first
+    while first < line.len and line[first] in {' ', '\t', '\r'}:
+      inc first
     if first == line.len or line[first] == '#':
       continue
 
@@ -49,10 +50,11 @@ func parseNimbleInfo*(
         let dep = part.strip()
         if dep.len > 0:
           # Optimization: check if it starts/ends with " before stripping to avoid extra allocation
-          let cleanDep = if dep.startsWith('"') and dep.endsWith('"') and dep.len >= 2:
-                           dep[1 ..^ 2]
-                         else:
-                           dep
+          let cleanDep =
+            if dep.startsWith('"') and dep.endsWith('"') and dep.len >= 2:
+              dep[1 ..^ 2]
+            else:
+              dep
           if cleanDep.len > 0:
             requires.add(cleanDep)
     elif '=' in l:
@@ -88,11 +90,78 @@ func parseNimbleInfo*(
   if requires.len > 0:
     result.add("Depends On      : " & requires.join(", ") & "\n")
 
+func parseNimbleInfo*(
+    raw, name, url: string, tagsLine: string
+): string {.noSideEffect.} =
+  var info = initTable[string, string]()
+  var requires = newSeqOfCap[string](16)
+
+  for line in raw.split('\n'):
+    var first = 0
+    while first < line.len and line[first] in {' ', '\t', '\r'}:
+      inc first
+    if first == line.len or line[first] == '#':
+      continue
+
+    let l = line.strip()
+    let lowerL = l.toLowerAscii()
+    if lowerL.startsWith("requires"):
+      var rest =
+        if lowerL.startsWith("requires:"):
+          l[9 ..^ 1].strip()
+        else:
+          l[8 ..^ 1].strip()
+      if rest.startsWith("(") and rest.endsWith(")"):
+        rest = rest[1 ..^ 2]
+      for part in rest.split(','):
+        let dep = part.strip()
+        if dep.len > 0:
+          let cleanDep =
+            if dep.startsWith('"') and dep.endsWith('"') and dep.len >= 2:
+              dep[1 ..^ 2]
+            else:
+              dep
+          if cleanDep.len > 0:
+            requires.add(cleanDep)
+    elif '=' in l:
+      let parts = l.split('=', 1)
+      let key = parts[0].strip().toLowerAscii()
+      let val = parts[1].strip().strip(chars = {'"'})
+      case key
+      of "version":
+        info["Version"] = val
+      of "author":
+        info["Author"] = val
+      of "description":
+        info["Description"] = val
+      of "license":
+        info["License"] = val
+      else:
+        discard
+
+  result = newStringOfCap(raw.len + 200)
+  result.add("Name            : " & name & "\n")
+  if info.hasKey("Version"):
+    result.add("Version         : " & info["Version"] & "\n")
+  if info.hasKey("Description"):
+    result.add("Description     : " & info["Description"] & "\n")
+  if info.hasKey("Author"):
+    result.add("Author          : " & info["Author"] & "\n")
+  if info.hasKey("License"):
+    result.add("License         : " & info["License"] & "\n")
+  if url.len > 0:
+    result.add("URL             : " & url & "\n")
+  if tagsLine.len > 0:
+    result.add("Tags            : " & tagsLine & "\n")
+  if requires.len > 0:
+    result.add("Depends On      : " & requires.join(", ") & "\n")
+
 func formatFallbackInfo*(raw: string): string {.noSideEffect.} =
   var info = initTable[string, string]()
   for line in raw.split('\n'):
     var first = 0
-    while first < line.len and line[first] in {' ', '\t', '\r'}: inc first
+    while first < line.len and line[first] in {' ', '\t', '\r'}:
+      inc first
     if first == line.len:
       continue
 

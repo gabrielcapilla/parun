@@ -23,9 +23,7 @@ type
 proc metric*(
     name: string, bytes: int, length: int = 0, capacity: int = 0, note: string = ""
 ): MemoryMetric {.inline.} =
-  MemoryMetric(
-    name: name, bytes: bytes, length: length, capacity: capacity, note: note
-  )
+  MemoryMetric(name: name, bytes: bytes, length: length, capacity: capacity, note: note)
 
 proc addMetric*(
     section: var MemorySection,
@@ -40,7 +38,9 @@ proc addMetric*(
 proc nestedBytes*(value: string): int {.inline.} =
   capacity(value)
 
-proc nestedBytes*[T: SomeInteger | SomeFloat | char | bool | enum](value: T): int {.inline.} =
+proc nestedBytes*[T: SomeInteger | SomeFloat | char | bool | enum](
+    value: T
+): int {.inline.} =
   0
 
 proc nestedBytes*[T](value: seq[T]): int =

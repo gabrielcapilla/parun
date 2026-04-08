@@ -1,5 +1,6 @@
 import std/[tables, monotimes, times]
 import ../core/types
+import contracts
 
 type
   WorkerReqKind* = enum
@@ -21,19 +22,8 @@ type
     targetMode*: SearchMode
     kind*: WorkerReqKind
 
-  PkgManagerType* = enum
-    ManPacman
-    ManParu
-    ManYay
-    ManNimble
-
-  ToolDef* = object
-    bin*: string
-    installCmd*: string
-    uninstallCmd*: string
-    searchCmd*: string
-    sudo*: bool
-    supportsAur*: bool
+  PkgManagerType* = PluginId
+  ToolDef* = PluginContract
 
   ## Temporary accumulator for SoA data
   BatchBuilder* = object
@@ -49,36 +39,16 @@ type
     resChan*: ptr Channel[Msg]
     toolType*: PkgManagerType
 
-func createPacmanToolDef(binName: string, withSudo: bool): ToolDef =
-  ToolDef(
-    bin: binName,
-    installCmd: " -S ",
-    uninstallCmd: " -R ",
-    searchCmd: " -Ss ",
-    sudo: withSudo,
-    supportsAur: false,
-  )
-
-func createNimbleToolDef(): ToolDef =
-  ToolDef(
-    bin: "nimble",
-    installCmd: " install ",
-    uninstallCmd: " uninstall ",
-    searchCmd: " search ",
-    sudo: false,
-    supportsAur: false,
-  )
+const
+  ManPacman* = PluginPacman
+  ManParu* = PluginParu
+  ManYay* = PluginYay
+  ManNimble* = PluginNimble
 
 const BatchSize* = 64 * 1024
-const Tools* = [
-  ManPacman: createPacmanToolDef("pacman", true),
-  ManParu: createPacmanToolDef("paru", false),
-  ManYay: createPacmanToolDef("yay", false),
-  ManNimble: createNimbleToolDef(),
-]
 
 func getToolDef*(tool: PkgManagerType): lent ToolDef {.inline.} =
-  Tools[tool]
+  getPluginContract(tool)
 
 func initBatchBuilder*(source: DataSource, mode: SearchMode): BatchBuilder =
   result.source = source

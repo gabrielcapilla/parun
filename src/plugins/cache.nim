@@ -10,7 +10,9 @@
 import std/[os, osproc, times, streams, parsejson, memfiles, strutils, tables]
 
 const
+  CacheDirName* = "parun"
   CacheDir* = ".cache/parun"
+  CacheDirEnvVar = "PARUN_CACHE_DIR"
   AurJsonCache* = "aur-meta.json"
   AurBinCache* = "aur-meta.bin"
   AurJsonGzCache* = "aur-meta.json.gz"
@@ -23,7 +25,7 @@ const
   NimbleMetaUrl* =
     "https://raw.githubusercontent.com/nim-lang/packages/refs/heads/master/packages.json"
 
-  CacheMaxAgeHours* = 24
+  CacheMaxAgeHours* = 1
   BinaryMagic = "PARU"
   BinaryVersion = 2
 
@@ -45,6 +47,31 @@ type
 
   ZeroAllocCallback* =
     proc(name: openArray[char], version: openArray[char]) {.closure, gcsafe.}
+
+proc safeRemove(path: string) =
+  if not fileExists(path):
+    return
+  try:
+    removeFile(path)
+  except CatchableError:
+    discard
+
+proc tempSiblingPath(path: string, suffix: string): string =
+  let millis = int64(epochTime() * 1000.0)
+  path & "." & suffix & "." & $getCurrentProcessId() & "." & $millis & ".tmp"
+
+proc atomicReplace(srcPath: string, dstPath: string): bool =
+  try:
+    moveFile(srcPath, dstPath)
+    return true
+  except CatchableError:
+    try:
+      safeRemove(dstPath)
+      moveFile(srcPath, dstPath)
+      return true
+    except CatchableError:
+      safeRemove(srcPath)
+      return false
 
 proc validateCacheFile*(path: string): bool =
   ## Validates cache file integrity
@@ -351,8 +378,16 @@ proc getStreamedNimbleMeta*(jsonPath: string): Table[string, NimbleMeta] =
       discard
 
 proc getCachePath*(): string =
-  let homeDir = getHomeDir()
-  let cacheDir = homeDir / CacheDir
+  let envOverride = getEnv(CacheDirEnvVar, "").strip()
+  let cacheDir =
+    if envOverride.len > 0:
+      envOverride
+    else:
+      let xdgCache = getEnv("XDG_CACHE_HOME", "").strip()
+      if xdgCache.len > 0:
+        xdgCache / CacheDirName
+      else:
+        getHomeDir() / ".cache" / CacheDirName
   createDir(cacheDir)
   return cacheDir
 
@@ -420,43 +455,68 @@ proc ensureJsonAvailable*(cache: PackageCache): bool =
   let jsonPath = cacheDir / cache.jsonPath
   if fileExists(jsonPath) and validateJsonFile(jsonPath):
     return true
-  # Download and validate
-  if not downloadUncompressed(cache.metaUrl, jsonPath):
+  let downloadPath = tempSiblingPath(jsonPath, "download")
+  defer:
+    safeRemove(downloadPath)
+  if not downloadUncompressed(cache.metaUrl, downloadPath):
     return false
-  return validateJsonFile(jsonPath)
+  if not validateJsonFile(downloadPath):
+    return false
+  return atomicReplace(downloadPath, jsonPath)
 
 proc refreshCache*(cache: var PackageCache, keepJson: bool = false): bool =
   let cacheDir = getCachePath()
   let jsonPath = cacheDir / cache.jsonPath
   let binPath = cacheDir / cache.binPath
   let stampPath = cacheDir / cache.stampPath
+  let tempJsonPath = tempSiblingPath(jsonPath, "json")
+  let tempBinPath = tempSiblingPath(binPath, "bin")
+  let tempStampPath = tempSiblingPath(stampPath, "stamp")
+  let tempGzPath =
+    if cache.gzPath.len > 0:
+      tempSiblingPath(cacheDir / cache.gzPath, "gz")
+    else:
+      ""
+
+  defer:
+    safeRemove(tempJsonPath)
+    safeRemove(tempBinPath)
+    safeRemove(tempStampPath)
+    if tempGzPath.len > 0:
+      safeRemove(tempGzPath)
 
   if cache.gzPath.len > 0:
-    let gzPath = cacheDir / cache.gzPath
-    if not downloadCompressedGzOnly(cache.metaUrl, gzPath):
+    if not downloadCompressedGzOnly(cache.metaUrl, tempGzPath):
       return false
-    if not decompressExistingGz(gzPath, jsonPath):
+    if not decompressExistingGz(tempGzPath, tempJsonPath):
       return false
-    removeFile(gzPath)
   else:
-    if not downloadUncompressed(cache.metaUrl, jsonPath):
+    if not downloadUncompressed(cache.metaUrl, tempJsonPath):
       return false
 
   # Validate downloaded JSON before conversion
-  if not validateJsonFile(jsonPath):
-    # Invalid JSON - clean up and fail
-    try:
-      removeFile(jsonPath)
-    except CatchableError:
-      discard
+  if not validateJsonFile(tempJsonPath):
     return false
 
-  if not convertJsonToBinary(jsonPath, binPath):
+  if not convertJsonToBinary(tempJsonPath, tempBinPath):
+    return false
+  if not validateCacheFile(tempBinPath):
+    return false
+  if not atomicReplace(tempBinPath, binPath):
     return false
 
-  if not keepJson:
-    removeFile(jsonPath)
-  writeFile(stampPath, $getTime().toUnix())
+  if keepJson:
+    if not atomicReplace(tempJsonPath, jsonPath):
+      return false
+  else:
+    safeRemove(jsonPath)
+
+  try:
+    writeFile(tempStampPath, $getTime().toUnix())
+  except CatchableError:
+    return false
+  if not atomicReplace(tempStampPath, stampPath):
+    return false
   return true
 
 proc loadOrRefreshCache*(cache: var PackageCache, keepJson: bool = false): bool =

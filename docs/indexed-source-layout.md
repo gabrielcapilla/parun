@@ -18,13 +18,17 @@ This is the Phase 2 binary contract for offline-built, immutable source indexes.
 Bytes 0-31:
 
 - `magic[4]`: `PRIX`
-- `version[u32]`: `3`
+- `version[u32]`: `5` (reader also accepts `4`)
 - `source_kind[u32]`: `0=system`, `1=aur`, `2=nimble`
 - `package_count[u32]`
 - `repo_count[u32]`
 - `section_count[u32]`
 - `header_bytes[u32]`: `32`
-- `reserved[u32]`: `0`
+- `flags[u32]`:
+  - bit `0`: packed words are `u32` (else packed `u24`)
+  - bit `1`: `repo_idx` packed as `u8` (else `u16`)
+  - bit `2`: `ver_blob` uses block-compressed cold blob container
+  - bit `3`: `repo_blob` uses block-compressed cold blob container
 
 ## Section Directory
 
@@ -56,10 +60,23 @@ Cold display path:
 
 - `ver_off`: `package_count` entries of `u32`
 - `ver_len`: `package_count` entries of `u16`
-- `ver_blob`: concatenated version strings
+- `ver_blob`: concatenated version strings, or compressed cold blob container when flag bit `2` is set
 - `repo_off`: `repo_count` entries of `u32`
 - `repo_len`: `repo_count` entries of `u16`
-- `repo_blob`: concatenated repository names
+- `repo_blob`: concatenated repository names, or compressed cold blob container when flag bit `3` is set
+
+Compressed cold blob container (`ver_blob`/`repo_blob` when enabled):
+
+- Header:
+  - `raw_len[u32]`
+  - `block_bytes[u32]` (currently `256`)
+  - `block_count[u32]`
+  - `block_offsets[u32 * (block_count + 1)]` relative to payload start
+- Block payload records:
+  - `raw_len[u16]`
+  - `enc_len[u16]` (`0` means raw literal block)
+  - payload bytes (raw or tiny RLE stream)
+- Offsets in `ver_off`/`repo_off` always target the logical uncompressed coordinate space.
 
 ## Determinism Rules
 
@@ -71,7 +88,7 @@ Cold display path:
 ## Validation Rules
 
 - The file must start with `PRIX`.
-- The version must be exactly `3`.
+- The version must be `4` or `5`.
 - `header_bytes` must be exactly `32`.
 - Every section range must stay within file bounds.
 - `source_kind` must map to a known source enum.

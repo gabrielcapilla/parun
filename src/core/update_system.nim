@@ -1,10 +1,14 @@
-import std/[monotimes, tables, times]
-import ../types
+import std/[monotimes, times]
+import types, state
 import input_system
 
-proc detailsCacheBytes(cache: Table[int32, string]): int =
-  for content in cache.values:
-    result += content.len
+proc clampDetailContent(content: string): string =
+  if content.len <= MaxDetailPayloadBytes:
+    return content
+  const Suffix = "\n\n[truncated]"
+  let keep = max(0, MaxDetailPayloadBytes - Suffix.len)
+  result = content[0 ..< keep]
+  result.add(Suffix)
 
 proc update*(state: var AppState, msg: var Msg, listHeight: int) =
   state.needsRedraw = true
@@ -23,10 +27,13 @@ proc update*(state: var AppState, msg: var Msg, listHeight: int) =
     if msg.pkgSlot != state.activeSlot:
       state.needsRedraw = false
       return
-    if state.detailsCache.len >= DetailsCacheLimit or
-        detailsCacheBytes(state.detailsCache) + msg.content.len > DetailsCacheByteBudget:
-      state.detailsCache.clear()
-    state.detailsCache[msg.pkgIdx] = msg.content
+    let content = clampDetailContent(msg.content)
+    if detailCacheLen(state.detailsCache) >= DetailsCacheLimit or
+        detailCacheUsedBytes(state.detailsCache) + content.len > DetailsCacheByteBudget:
+      clearDetailCache(state.detailsCache)
+      state.wrappedDetails = @[]
+      state.lastDetailIdx = -1
+    detailCachePut(state.detailsCache, msg.pkgIdx, content)
     if msg.pkgIdx == state.pendingDetailIdx and msg.pkgSlot == state.pendingDetailSlot:
       state.pendingDetailIdx = -1
       state.detailRequestInFlight = false
