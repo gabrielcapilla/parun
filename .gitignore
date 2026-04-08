@@ -24,7 +24,11 @@ log.md
 dist/
 *.tar.gz
 *.zip
-docs/how-i-use-obsidian.md
+ROADMAP.json
+roadmap.json
+CHANGELOG.md
+docs/
+schemas/
 
 # Editor files
 *~
