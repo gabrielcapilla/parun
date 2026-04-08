@@ -3,7 +3,7 @@
 version       = "0.6.0"
 author        = "Gabriel Capilla"
 description   = "Terminal UI for pacman, AUR & nimble"
-license       = "MIT"
+license       = "GNU AGPLv3"
 srcDir        = "src"
 bin           = @["parun"]
 
