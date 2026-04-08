@@ -79,6 +79,7 @@ Release tasks:
 ```bash
 nimble release       # deterministic public build
 nimble releaseNative # host-optimized local build (not for redistribution)
+nimble releasePortable # build + fail if artifact requires x86-64-v3/v4
 ```
 
 ---
