@@ -1,7 +1,6 @@
 ## Hardware-accelerated text search with multi-architecture support.
 ##
 ## Supported backends:
-## - AVX2 (x86_64): 32 characters per cycle.
 ## - SSE2 (x86/x64): 16 characters per cycle.
 ## - Scalar: Fallback for other architectures (ARM, etc.).
 
@@ -9,33 +8,7 @@ import std/[bitops, strutils]
 
 # --- SIMD Backend Selection ---
 
-when defined(avx2):
-  ## AVX2 Implementation
-  type SimdVector* {.importc: "__m256i", header: "immintrin.h", bycopy.} = object
-  const VectorSize* = 32
-
-  func mm_set1_epi8*(
-    a: int8
-  ): SimdVector {.inline, importc: "_mm256_set1_epi8", header: "immintrin.h".}
-  func mm_add_epi8*(
-    a, b: SimdVector
-  ): SimdVector {.inline, importc: "_mm256_add_epi8", header: "immintrin.h".}
-  func mm_and_si*(
-    a, b: SimdVector
-  ): SimdVector {.inline, importc: "_mm256_and_si256", header: "immintrin.h".}
-  func mm_cmpgt_epi8*(
-    a, b: SimdVector
-  ): SimdVector {.inline, importc: "_mm256_cmpgt_epi8", header: "immintrin.h".}
-  func mm_loadu_si*(
-    p: pointer
-  ): SimdVector {.inline, importc: "_mm256_loadu_si256", header: "immintrin.h".}
-  func mm_cmpeq_epi8*(
-    a, b: SimdVector
-  ): SimdVector {.inline, importc: "_mm256_cmpeq_epi8", header: "immintrin.h".}
-  func mm_movemask_epi8*(
-    a: SimdVector
-  ): int32 {.inline, importc: "_mm256_movemask_epi8", header: "immintrin.h".}
-elif defined(amd64) or defined(sse2):
+when defined(amd64) or defined(sse2):
   ## SSE2 Implementation
   type SimdVector* {.importc: "__m128i", header: "emmintrin.h", bycopy.} = object
   const VectorSize* = 16
