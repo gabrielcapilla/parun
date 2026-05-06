@@ -33,6 +33,7 @@ parun --help
 parun --aur
 parun --nimble
 parun --noinfo
+parun --no-animation
 parun --aur --pacman --nimble
 ```
 
@@ -50,6 +51,8 @@ If any of `--pacman`, `--aur`, or `--nimble` is passed, those flags define the a
 
 - `Esc`: quit
 - `F1`: toggle info panel
+- `Up` / `Ctrl+K`: move selection up
+- `Down` / `Ctrl+J`: move selection down
 - `Tab`: select/deselect package
 - `Enter`: install focused package or selected set
 - `Ctrl+R`: remove selected
@@ -58,8 +61,9 @@ If any of `--pacman`, `--aur`, or `--nimble` is passed, those flags define the a
 ## Nimble Tasks
 
 ```bash
-nimble release          # deterministic release build
-nimble releaseNative    # local host-optimized build
+nimble baseline_x86_64     # portable GitHub Release binary
+nimble baseline_x86_64_v3  # optimized x86-64-v3 GitHub Release binary
+nimble native              # local host-optimized build
 ```
 
 ---

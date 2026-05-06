@@ -1,0 +1,22 @@
+# Maintainer: Gabriel Capilla
+pkgname=parun-bin
+pkgver=0.7.0
+pkgrel=1
+pkgdesc='Terminal UI for pacman, AUR and nimble (precompiled portable binary)'
+arch=('x86_64')
+url='https://github.com/gabrielcapilla/parun'
+license=('AGPL-3.0-or-later')
+depends=('glibc' 'openssl' 'pacman')
+optdepends=(
+  'paru: AUR backend'
+  'yay: fallback AUR backend'
+  'nimble: Nim package source support'
+)
+provides=('parun')
+conflicts=('parun')
+source=("parun-linux-x86_64-${pkgver}::${url}/releases/download/v${pkgver}/parun-linux-x86_64")
+sha256sums=('SKIP')
+
+package() {
+  install -Dm755 "parun-linux-x86_64-${pkgver}" "${pkgdir}/usr/bin/parun"
+}
