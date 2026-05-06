@@ -1,3 +1,12 @@
+## Runtime index orchestration.
+##
+## Notes:
+## - Builds per-source immutable `.prix` indexes from pacman/AUR/Nimble metadata.
+## - Applies strict age-based refresh and merged multi-source index generation.
+## - Used both at startup and by internal background refresh mode.
+## - Current Nimble `.prix` files embed package repository URLs, allowing the
+##   details worker to fetch remote `.nimble` manifests without creating
+##   `packages.json`/`packages.bin` during side-panel lookup.
 import std/[os, osproc, streams, strutils, tables, times]
 import indexes
 import ../plugins/[cache, pacman]
@@ -9,9 +18,144 @@ const
   RuntimeRefreshLockFlag* = "--refresh-lock"
   RuntimeRefreshMergedOnlyFlag* = "--refresh-merged-only"
   RuntimeIndexDirFlag* = "--index-dir"
+  RuntimeIndexMaxAgeSecondsEnv* = "PARUN_INDEX_MAX_AGE_SECONDS"
 
 proc defaultRuntimeIndexDir*(): string =
-  getCachePath() / "indexes"
+  ## Default runtime index directory under cache root.
+  getCachePath()
+
+proc runtimeIndexMaxAgeSeconds(): int64 =
+  let defaultSeconds = int64(CacheMaxAgeHours) * 3600'i64
+  let raw = getEnv(RuntimeIndexMaxAgeSecondsEnv, "").strip()
+  if raw.len == 0:
+    return defaultSeconds
+  try:
+    let parsed = parseInt(raw)
+    if parsed <= 0:
+      return defaultSeconds
+    int64(parsed)
+  except ValueError:
+    defaultSeconds
+
+proc newestEntryMTime(dirPath: string): Time =
+  ## Directory mtime can miss metadata rewrites on some filesystems; scan one level.
+  if not dirExists(dirPath):
+    return Time()
+  result = getLastModificationTime(dirPath)
+  try:
+    for kind, path in walkDir(dirPath):
+      if kind in {pcFile, pcDir, pcLinkToFile, pcLinkToDir}:
+        let mtime = getLastModificationTime(path)
+        if mtime > result:
+          result = mtime
+  except CatchableError:
+    discard
+
+proc installedStateMTime(source: IndexedSourceKind): Time =
+  ## Installed flags are embedded in indexes; rebuild when local install DB changed.
+  case source
+  of iskSystem, iskAur:
+    newestEntryMTime("/var/lib/pacman/local")
+  of iskNimble:
+    let nimbleDir = getHomeDir() / ".nimble"
+    let pkgs2 = nimbleDir / "pkgs2"
+    let pkgs = nimbleDir / "pkgs"
+    max(newestEntryMTime(pkgs2), newestEntryMTime(pkgs))
+
+proc installedStateChangedSince(source: IndexedSourceKind, indexPath: string): bool =
+  let stateTime = installedStateMTime(source)
+  if stateTime == Time():
+    return false
+  stateTime > getLastModificationTime(indexPath)
+
+proc shellQuote(value: string): string =
+  result = "'"
+  for ch in value:
+    if ch == '\'':
+      result.add("'\\''")
+    else:
+      result.add(ch)
+  result.add("'")
+
+proc safeRemove(path: string) =
+  if not fileExists(path):
+    return
+  try:
+    removeFile(path)
+  except CatchableError:
+    discard
+
+proc tempRefreshPath(outputDir: string, stem, ext: string): string =
+  let millis = int64(epochTime() * 1000.0)
+  outputDir / ("." & stem & "." & $getCurrentProcessId() & "." & $millis & ext)
+
+proc downloadToPath(url: string, outPath: string): bool =
+  execCmd("curl -sfL --max-time 60 " & shellQuote(url) & " > " & shellQuote(outPath)) ==
+    0
+
+proc decompressGzipToPath(gzipPath: string, outPath: string): bool =
+  execCmd("gunzip -c " & shellQuote(gzipPath) & " > " & shellQuote(outPath)) == 0
+
+proc removeLegacyMetadataArtifacts() =
+  let cacheDir = getCachePath()
+  for rel in [
+    AurBinCache, AurJsonCache, AurJsonGzCache, AurStampFile, NimbleBinCache,
+    NimbleJsonCache, NimbleStampFile,
+  ]:
+    safeRemove(cacheDir / rel)
+
+proc removeLegacyIndexSubdirArtifacts(outputDir: string) =
+  let cacheDir = getCachePath()
+  if outputDir != cacheDir:
+    return
+  let legacyDir = cacheDir / "indexes"
+  for rel in [
+    "system.prix", "aur.prix", "nimble.prix", "merged.system-aur-nimble.prix",
+    "merged.system-aur.prix", "merged.system-nimble.prix", "merged.aur-nimble.prix",
+    RuntimeRefreshLockFile,
+  ]:
+    safeRemove(legacyDir / rel)
+  if dirExists(legacyDir):
+    try:
+      removeDir(legacyDir)
+    except CatchableError:
+      discard
+
+proc streamJsonIntoIndex(
+    jsonPath: string,
+    repoName: string,
+    installed: Table[string, bool],
+    builder: var SourceIndexBuilder,
+) =
+  var nameBuf = newStringOfCap(256)
+  var verBuf = newStringOfCap(64)
+  var urlBuf = newStringOfCap(128)
+  let builderPtr = addr builder
+  if not streamParseJsonZeroAlloc(
+    jsonPath,
+    proc(name: openArray[char], version: openArray[char], url: openArray[char]) =
+      nameBuf.setLen(name.len)
+      for i in 0 ..< name.len:
+        nameBuf[i] = name[i]
+
+      verBuf.setLen(version.len)
+      for i in 0 ..< version.len:
+        verBuf[i] = version[i]
+
+      urlBuf.setLen(url.len)
+      for i in 0 ..< url.len:
+        urlBuf[i] = url[i]
+
+      addPackageToIndex(
+        builderPtr[],
+        name = nameBuf,
+        version = verBuf,
+        repo = repoName,
+        installed = installed.hasKey(nameBuf),
+        url = urlBuf,
+      ),
+  ):
+    raise newException(IOError, "failed to parse metadata JSON: " & jsonPath)
 
 proc loadInstalledMap(): Table[string, bool] =
   let (output, exitCode) = execCmdEx("pacman -Q")
@@ -48,31 +192,24 @@ proc buildSystemIndex(
       installed = installedMap.hasKey(name),
     )
 
-proc buildAurIndex(builder: var SourceIndexBuilder, installedMap: Table[string, bool]) =
-  var aurCache = initAurCache()
-  if not safeLoadOrRefreshCache(aurCache):
-    raise newException(IOError, "failed to load AUR cache")
+proc buildAurIndex(
+    builder: var SourceIndexBuilder,
+    installedMap: Table[string, bool],
+    outputDir: string,
+) =
+  let tempJsonPath = tempRefreshPath(outputDir, "aur-refresh", ".json.tmp")
+  let tempGzPath = tempRefreshPath(outputDir, "aur-refresh", ".json.gz.tmp")
+  defer:
+    safeRemove(tempJsonPath)
+    safeRemove(tempGzPath)
 
-  let binPath = getCachePath() / aurCache.binPath
-  var nameBuf = newStringOfCap(256)
-  var verBuf = newStringOfCap(64)
-
-  withBinaryCache(binPath, name, version):
-    nameBuf.setLen(name.len)
-    for i in 0 ..< name.len:
-      nameBuf[i] = name[i]
-
-    verBuf.setLen(version.len)
-    for i in 0 ..< version.len:
-      verBuf[i] = version[i]
-
-    addPackageToIndex(
-      builder,
-      name = nameBuf,
-      version = verBuf,
-      repo = "aur",
-      installed = installedMap.hasKey(nameBuf),
-    )
+  if not downloadToPath(AurMetaUrl, tempGzPath):
+    raise newException(IOError, "failed to download AUR metadata")
+  if not decompressGzipToPath(tempGzPath, tempJsonPath):
+    raise newException(IOError, "failed to decompress AUR metadata")
+  if not validateJsonFile(tempJsonPath):
+    raise newException(IOError, "invalid AUR metadata JSON")
+  streamJsonIntoIndex(tempJsonPath, "aur", installedMap, builder)
 
 proc loadInstalledNimble(): Table[string, bool] =
   result = initTable[string, bool]()
@@ -87,31 +224,18 @@ proc loadInstalledNimble(): Table[string, bool] =
         result[part] = true
         break
 
-proc buildNimbleIndex(builder: var SourceIndexBuilder, installed: Table[string, bool]) =
-  var nimbleCache = initNimbleCache()
-  if not safeLoadOrRefreshCache(nimbleCache, keepJson = true):
-    raise newException(IOError, "failed to load Nimble cache")
+proc buildNimbleIndex(
+    builder: var SourceIndexBuilder, installed: Table[string, bool], outputDir: string
+) =
+  let tempJsonPath = tempRefreshPath(outputDir, "nimble-refresh", ".json.tmp")
+  defer:
+    safeRemove(tempJsonPath)
 
-  let binPath = getCachePath() / nimbleCache.binPath
-  var nameBuf = newStringOfCap(256)
-  var verBuf = newStringOfCap(64)
-
-  withBinaryCache(binPath, name, version):
-    nameBuf.setLen(name.len)
-    for i in 0 ..< name.len:
-      nameBuf[i] = name[i]
-
-    verBuf.setLen(version.len)
-    for i in 0 ..< version.len:
-      verBuf[i] = version[i]
-
-    addPackageToIndex(
-      builder,
-      name = nameBuf,
-      version = verBuf,
-      repo = "nimble",
-      installed = installed.hasKey(nameBuf),
-    )
+  if not downloadToPath(NimbleMetaUrl, tempJsonPath):
+    raise newException(IOError, "failed to download Nimble metadata")
+  if not validateJsonFile(tempJsonPath):
+    raise newException(IOError, "invalid Nimble metadata JSON")
+  streamJsonIntoIndex(tempJsonPath, "nimble", installed, builder)
 
 proc parseSourceToken(token: string): IndexedSourceKind =
   case token.strip().toLowerAscii()
@@ -125,6 +249,7 @@ proc parseSourceToken(token: string): IndexedSourceKind =
     raise newException(ValueError, "unknown source token: " & token)
 
 proc parseEnabledSources*(value: string): set[IndexedSourceKind] =
+  ## Parses comma-separated source list from CLI/internal flags.
   result = {}
   if value.len == 0:
     return
@@ -144,6 +269,7 @@ proc encodeEnabledSources(enabledSources: set[IndexedSourceKind]): string =
 proc buildSelectedSourceIndexes*(
     outputDir: string, enabledSources: set[IndexedSourceKind]
 ): seq[SourceIndexStats] =
+  ## Builds indexes only for selected sources.
   createDir(outputDir)
   var installedMap: Table[string, bool]
   var nimbleInstalled: Table[string, bool]
@@ -160,15 +286,19 @@ proc buildSelectedSourceIndexes*(
 
   if iskAur in enabledSources:
     var aurBuilder = initSourceIndexBuilder(iskAur)
-    buildAurIndex(aurBuilder, installedMap)
+    buildAurIndex(aurBuilder, installedMap, outputDir)
     result.add(finishSourceIndex(aurBuilder, outputDir / "aur.prix"))
 
   if iskNimble in enabledSources:
     var nimbleBuilder = initSourceIndexBuilder(iskNimble)
-    buildNimbleIndex(nimbleBuilder, nimbleInstalled)
+    buildNimbleIndex(nimbleBuilder, nimbleInstalled, outputDir)
     result.add(finishSourceIndex(nimbleBuilder, outputDir / "nimble.prix"))
 
+  removeLegacyMetadataArtifacts()
+  removeLegacyIndexSubdirArtifacts(outputDir)
+
 proc buildAllSourceIndexes*(outputDir: string): seq[SourceIndexStats] =
+  ## Convenience wrapper for all supported sources.
   buildSelectedSourceIndexes(outputDir, {iskSystem, iskAur, iskNimble})
 
 proc indexFilename(source: IndexedSourceKind): string =
@@ -176,6 +306,9 @@ proc indexFilename(source: IndexedSourceKind): string =
   of iskSystem: "system.prix"
   of iskAur: "aur.prix"
   of iskNimble: "nimble.prix"
+
+proc runtimeSourceIndexPath*(outputDir: string, source: IndexedSourceKind): string =
+  outputDir / indexFilename(source)
 
 proc mergedSourceId(enabledSources: set[IndexedSourceKind]): string =
   var parts = newSeqOfCap[string](3)
@@ -191,12 +324,17 @@ proc mergedIndexPath(
 ): string =
   outputDir / ("merged." & mergedSourceId(enabledSources) & ".prix")
 
+proc runtimeMergedIndexPath*(
+    outputDir: string, enabledSources: set[IndexedSourceKind]
+): string =
+  mergedIndexPath(outputDir, enabledSources)
+
 proc componentIndexPaths(
     outputDir: string, enabledSources: set[IndexedSourceKind]
 ): seq[string] =
   for source in IndexedSourceKind:
     if source in enabledSources:
-      result.add(outputDir / indexFilename(source))
+      result.add(runtimeSourceIndexPath(outputDir, source))
 
 proc latestComponentMtime(paths: openArray[string]): Time =
   for path in paths:
@@ -219,8 +357,16 @@ proc buildMergedRuntimeIndex(path: string, sourcePaths: openArray[string]) =
         version = copyVersion(viewPtr, i),
         repo = copyRepo(viewPtr, i),
         installed = isInstalled(viewPtr, i),
+        url = copyUrl(viewPtr, i),
       )
   discard finishSourceIndex(builder, path)
+
+proc runInternalIndexRefresh*(
+  outputDir: string,
+  enabledSources: set[IndexedSourceKind],
+  lockPath: string = "",
+  mergedOnly: bool = false,
+): int
 
 proc scheduleStaleRefresh(
   outputDir: string, enabledSources: set[IndexedSourceKind], mergedOnly: bool = false
@@ -250,6 +396,7 @@ proc rebuildMergedRuntimeIndex(
 proc ensureMergedRuntimeIndex*(
     outputDir: string, enabledSources: set[IndexedSourceKind]
 ): string =
+  ## Returns merged index path, rebuilding only when required.
   if enabledSources.len == 0:
     raise newException(ValueError, "cannot merge empty source set")
   if enabledSources.len == 1:
@@ -277,8 +424,7 @@ proc maybeClearStaleLock(path: string) =
     return
   try:
     let ageSeconds = (getTime() - getLastModificationTime(path)).inSeconds()
-    let lockTtlSeconds = max(300'i64, int64(CacheMaxAgeHours) * 3600'i64)
-    if ageSeconds > lockTtlSeconds:
+    if ageSeconds > 300'i64:
       removeFile(path)
   except CatchableError:
     try:
@@ -303,6 +449,13 @@ proc scheduleStaleRefresh(
     return
 
   let exePath = getAppFilename()
+  if exePath.len == 0 or not fileExists(exePath):
+    try:
+      removeFile(lockPath)
+    except CatchableError:
+      discard
+    return
+
   let args =
     @[
       RuntimeRefreshFlag,
@@ -311,14 +464,53 @@ proc scheduleStaleRefresh(
       RuntimeRefreshLockFlag & "=" & lockPath,
     ] & (if mergedOnly: @[RuntimeRefreshMergedOnlyFlag] else: @[])
 
+  var launched = false
   try:
     var procHandle = startProcess(exePath, args = args, options = {poStdErrToStdOut})
+    let immediateExitCode = peekExitCode(procHandle)
     procHandle.close()
+    launched = immediateExitCode == -1 or immediateExitCode == 0
   except CatchableError:
+    launched = false
+
+  if not launched:
     try:
       removeFile(lockPath)
     except CatchableError:
       discard
+
+proc scheduleIndexRefresh*(
+    outputDir: string, enabledSources: set[IndexedSourceKind], mergedOnly: bool = false
+) =
+  ## Schedules background index construction; never builds on caller thread.
+  scheduleStaleRefresh(outputDir, enabledSources, mergedOnly)
+
+proc prepareRuntimeIndexesAsync*(
+    outputDir: string = defaultRuntimeIndexDir(),
+    enabledSources: set[IndexedSourceKind] = {iskSystem, iskAur, iskNimble},
+): seq[ValidatedSourceIndex] =
+  ## Validates existing indexes and schedules stale/missing rebuild work.
+  ## Missing indexes are reported as invalid instead of built synchronously.
+  if enabledSources.len == 0:
+    return
+  createDir(outputDir)
+  var needsRefresh = false
+  let maxAgeSeconds = runtimeIndexMaxAgeSeconds()
+  for source in IndexedSourceKind:
+    if source notin enabledSources:
+      continue
+    let path = runtimeSourceIndexPath(outputDir, source)
+    let validated = validateSourceIndex(path)
+    result.add(validated)
+    if not validated.valid:
+      needsRefresh = true
+      continue
+    let stampTime = getLastModificationTime(path)
+    if installedStateChangedSince(source, path) or
+        (getTime() - stampTime).inSeconds() >= maxAgeSeconds:
+      needsRefresh = true
+  if needsRefresh:
+    scheduleIndexRefresh(outputDir, enabledSources)
 
 proc runInternalIndexRefresh*(
     outputDir: string,
@@ -326,6 +518,7 @@ proc runInternalIndexRefresh*(
     lockPath: string = "",
     mergedOnly: bool = false,
 ): int =
+  ## Entrypoint used by hidden self-spawned refresh mode.
   defer:
     if lockPath.len > 0 and fileExists(lockPath):
       try:
@@ -352,11 +545,15 @@ proc ensureRuntimeIndexes*(
     outputDir: string = defaultRuntimeIndexDir(),
     enabledSources: set[IndexedSourceKind] = {iskSystem, iskAur, iskNimble},
 ): seq[ValidatedSourceIndex] =
+  ## Ensures enabled source indexes exist and are valid.
+  ## Missing/invalid indexes are rebuilt synchronously; stale indexes refresh in background.
   if enabledSources.len == 0:
     return
 
   var missingOrInvalid = false
   var staleOnly = false
+  var installedStateChanged = false
+  let maxAgeSeconds = runtimeIndexMaxAgeSeconds()
   for source in IndexedSourceKind:
     if source notin enabledSources:
       continue
@@ -367,10 +564,12 @@ proc ensureRuntimeIndexes*(
       missingOrInvalid = true
     else:
       let stampTime = getLastModificationTime(path)
-      if (getTime() - stampTime).inHours >= CacheMaxAgeHours:
+      if installedStateChangedSince(source, path):
+        installedStateChanged = true
+      if (getTime() - stampTime).inSeconds() >= maxAgeSeconds:
         staleOnly = true
 
-  if missingOrInvalid:
+  if missingOrInvalid or installedStateChanged:
     discard buildSelectedSourceIndexes(outputDir, enabledSources)
 
     result.setLen(0)

@@ -1,11 +1,18 @@
+## Fixed-capacity per-frame string arena.
+##
+## Notes:
+## - Used to avoid repeated small allocations during render/update cycles.
+## - Allocation is bump-pointer with wrap-around, not general-purpose malloc.
 import types
 
+## Creates an arena with exact byte capacity.
 proc initStringArena*(capacity: int): StringArena =
   var buffer = newSeqOfCap[char](capacity)
   buffer.setLen(capacity)
   StringArena(buffer: buffer, capacity: capacity, offset: 0)
 
 proc allocString*(arena: var StringArena, s: string): StringArenaHandle =
+  ## Copies `s` into arena and returns a stable slice handle until next reset/wrap.
   let requiredLen = s.len
 
   if requiredLen > arena.capacity:
@@ -27,4 +34,5 @@ proc allocString*(arena: var StringArena, s: string): StringArenaHandle =
   arena.offset += requiredLen
 
 proc resetArena*(arena: var StringArena) =
+  ## Resets bump pointer to start; existing handles become logically stale.
   arena.offset = 0

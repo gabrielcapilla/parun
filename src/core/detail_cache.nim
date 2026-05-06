@@ -1,17 +1,29 @@
+## UI-side details cache with bounded memory and lightweight block compression.
+##
+## Notes:
+## - This cache stores *cold* package detail payloads keyed by package index.
+## - Entries are bounded by `DetailsCacheLimit` and `DetailsCacheByteBudget`.
+## - Payloads are encoded in fixed-size blocks with a tiny RLE dialect:
+##   literal blocks are stored raw; repeated runs are compressed opportunistically.
 import types
 
+## Initializes an empty details cache.
 proc initDetailCache*(): DetailCache =
   DetailCache(arena: @[], arenaUsed: 0, count: 0, nextEvict: 0)
 
+## Number of active metadata entries.
 func detailCacheLen*(cache: DetailCache): int {.inline, noSideEffect.} =
   cache.count
 
+## Total allocated bytes in the payload arena.
 func detailCacheCapacityBytes*(cache: DetailCache): int {.inline, noSideEffect.} =
   cache.arena.len
 
+## Bytes currently consumed by encoded payload data.
 func detailCacheUsedBytes*(cache: DetailCache): int {.inline, noSideEffect.} =
   cache.arenaUsed
 
+## Drops all entries while retaining arena allocation for reuse.
 proc clearDetailCache*(cache: var DetailCache) =
   cache.arenaUsed = 0
   cache.count = 0
@@ -40,6 +52,11 @@ proc readLe16(src: seq[char], pos: int): int {.inline.} =
 proc encodeDetailRleBlock(
     src: string, startPos: int, blockLen: int, dst: var seq[char]
 ): int =
+  ## Encodes one block.
+  ## Format:
+  ## - literal byte: byte itself
+  ## - escaped literal 0xFF: 0xFF 0x00
+  ## - run: 0xFF <len> <byte>   (only when len >= 4)
   let before = dst.len
   var i = 0
   while i < blockLen:
@@ -119,6 +136,7 @@ proc encodeDetailPayload(value: string): seq[char] =
     pos += rawLen
 
 proc detailCacheGet*(cache: DetailCache, key: int32): string =
+  ## Returns decoded details for `key`, or `""` when missing/corrupt.
   let idx = findDetailCacheEntry(cache, key)
   if idx < 0:
     return ""
@@ -157,6 +175,12 @@ proc detailCacheGet*(cache: DetailCache, key: int32): string =
       srcPos += blockEncLen
 
 proc detailCachePut*(cache: var DetailCache, key: int32, value: string) =
+  ## Inserts/replaces `key` with compressed payload.
+  ##
+  ## Replacement policy:
+  ## - update existing slot if key exists
+  ## - append until fixed slot budget is exhausted
+  ## - then round-robin eviction (`nextEvict`)
   let rawLen = value.len
   if rawLen < 0 or rawLen > DetailsCacheByteBudget:
     return

@@ -1,3 +1,10 @@
+## Runtime reader for validated immutable source indexes.
+##
+## Notes:
+## - Exposes hot-path pointer/length accessors (`namePtr`, `bucketRange`, ...).
+## - Version and repository cold fields can be served from raw blobs or
+##   compressed block containers; URL fields are stored as raw cold slices.
+## - No mutable package corpus is reconstructed during normal query flow.
 import std/memfiles
 import source_index_core, source_index_codec, source_index_validation
 
@@ -19,6 +26,7 @@ proc repoCount*(view: ptr SourceIndexView): int {.inline, noSideEffect.} =
   view[].repoCount
 
 proc valid*(view: ptr SourceIndexView): bool {.inline, noSideEffect.} =
+  ## True when view points to a mapped/initialized index.
   not view.isNil and view[].mapped and view[].packageCount >= 0
 
 proc lowerNameOffset(view: ptr SourceIndexView, idx: int): int {.inline.} =
@@ -35,6 +43,11 @@ proc versionOffset(view: ptr SourceIndexView, idx: int): int {.inline.} =
 
 proc repoOffset(view: ptr SourceIndexView, idx: int): int {.inline.} =
   readPackedWordAt(view.sectionPtr(ssRepoOffsets), idx, view.wordBytes)
+
+proc urlOffset(view: ptr SourceIndexView, idx: int): int {.inline.} =
+  if view.sectionLen(ssUrlOffsets) == 0:
+    return 0
+  readPackedWordAt(view.sectionPtr(ssUrlOffsets), idx, view.wordBytes)
 
 proc repoIndex*(view: ptr SourceIndexView, idx: int): int {.inline.} =
   if view.repoIndexBytes == 1:
@@ -57,6 +70,11 @@ proc getVersionLen*(view: ptr SourceIndexView, idx: int): int {.inline.} =
 proc getRepoLen*(view: ptr SourceIndexView, idx: int): int {.inline.} =
   readU16At(view.sectionPtr(ssRepoLens), view.repoIndex(idx))
 
+proc getUrlLen*(view: ptr SourceIndexView, idx: int): int {.inline.} =
+  if view.sectionLen(ssUrlLens) == 0:
+    return 0
+  readU16At(view.sectionPtr(ssUrlLens), idx)
+
 proc isInstalled*(view: ptr SourceIndexView, idx: int): bool {.inline.} =
   (view.sectionPtr(ssFlags)[idx] and 1'u8) != 0
 
@@ -75,6 +93,9 @@ proc versionPtr*(view: ptr SourceIndexView, idx: int): ptr char {.inline.} =
 proc repoPtr*(view: ptr SourceIndexView, repoIdx: int): ptr char {.inline.} =
   cast[ptr char](addr view.sectionPtr(ssRepoBlob)[view.repoOffset(repoIdx)])
 
+proc urlPtr*(view: ptr SourceIndexView, idx: int): ptr char {.inline.} =
+  cast[ptr char](addr view.sectionPtr(ssUrlBlob)[view.urlOffset(idx)])
+
 proc appendSlice(
     ptrBase: ptr char, sliceLen: int, buffer: var string, maxLen: int = -1
 ) {.inline.} =
@@ -90,11 +111,13 @@ proc appendSlice(
 proc appendName*(
     view: ptr SourceIndexView, idx: int, buffer: var string, maxLen: int = -1
 ) {.inline.} =
+  ## Appends package name bytes for `idx`.
   appendSlice(view.namePtr(idx), view.getNameLen(idx), buffer, maxLen)
 
 proc appendVersion*(
     view: ptr SourceIndexView, idx: int, buffer: var string, maxLen: int = -1
 ) {.inline.} =
+  ## Appends package version bytes for `idx` (compressed or raw path).
   let vLen = view.getVersionLen(idx)
   if view.versionBlobMeta.enabled:
     appendCompressedBlobSlice(
@@ -112,6 +135,7 @@ proc appendVersion*(
 proc appendRepo*(
     view: ptr SourceIndexView, idx: int, buffer: var string, maxLen: int = -1
 ) {.inline.} =
+  ## Appends repository name bytes for `idx`.
   let repoIdx = view.repoIndex(idx)
   let rLen = readU16At(view.sectionPtr(ssRepoLens), repoIdx)
   if view.repoBlobMeta.enabled:
@@ -127,6 +151,15 @@ proc appendRepo*(
   else:
     appendSlice(view.repoPtr(repoIdx), rLen, buffer, maxLen)
 
+proc appendUrl*(
+    view: ptr SourceIndexView, idx: int, buffer: var string, maxLen: int = -1
+) {.inline.} =
+  ## Appends package source URL bytes for `idx` when present.
+  let uLen = view.getUrlLen(idx)
+  if uLen <= 0:
+    return
+  appendSlice(view.urlPtr(idx), uLen, buffer, maxLen)
+
 proc copyName*(view: ptr SourceIndexView, idx: int): string =
   result = newStringOfCap(view.getNameLen(idx))
   view.appendName(idx, result)
@@ -139,6 +172,10 @@ proc copyRepo*(view: ptr SourceIndexView, idx: int): string =
   result = newStringOfCap(view.getRepoLen(idx))
   view.appendRepo(idx, result)
 
+proc copyUrl*(view: ptr SourceIndexView, idx: int): string =
+  result = newStringOfCap(view.getUrlLen(idx))
+  view.appendUrl(idx, result)
+
 proc copyPkgId*(view: ptr SourceIndexView, idx: int): string =
   let repoLen = view.getRepoLen(idx)
   let nameLen = view.getNameLen(idx)
@@ -148,6 +185,7 @@ proc copyPkgId*(view: ptr SourceIndexView, idx: int): string =
   view.appendName(idx, result)
 
 proc predecodeColdFields*(view: ptr SourceIndexView, idx: int) =
+  ## Opportunistically pre-decodes cold version/repo blocks around a focused row.
   if not view.valid:
     return
   if idx < 0 or idx >= packageCount(view):
@@ -181,6 +219,7 @@ proc predecodeColdFields*(view: ptr SourceIndexView, idx: int) =
         )
 
 proc bucketRange*(view: ptr SourceIndexView, firstByte: uint8): Slice[int] {.inline.} =
+  ## Returns posting-list range for first-byte candidate narrowing.
   let bucketIndex = int(firstByte)
   let start =
     readPackedWordAt(view.sectionPtr(ssBucketOffsets), bucketIndex, view.wordBytes)
@@ -203,9 +242,12 @@ proc mappedColdBytes*(view: ptr SourceIndexView): int =
   result =
     view.sectionLen(ssVersionOffsets) + view.sectionLen(ssVersionLens) +
     view.sectionLen(ssVersionBlob) + view.sectionLen(ssRepoOffsets) +
-    view.sectionLen(ssRepoLens) + view.sectionLen(ssRepoBlob)
+    view.sectionLen(ssRepoLens) + view.sectionLen(ssRepoBlob) +
+    view.sectionLen(ssUrlOffsets) + view.sectionLen(ssUrlLens) +
+    view.sectionLen(ssUrlBlob)
 
 proc prefaultHotSections*(view: ptr SourceIndexView) =
+  ## Touches representative bytes in hot sections to reduce first-hit page faults.
   if not view.valid:
     return
   var sink: uint8 = 0
@@ -229,6 +271,7 @@ proc close*(view: var SourceIndexView) =
     view = default(SourceIndexView)
 
 proc openSourceIndex*(path: string): SourceIndexView =
+  ## Opens and maps a previously validated source index file.
   let validated = validateSourceIndex(path)
   if not validated.valid:
     raise
@@ -281,6 +324,7 @@ proc openSourceIndex*(path: string): SourceIndexView =
   )
 
 proc openValidatedSourceIndex*(validated: ValidatedSourceIndex): SourceIndexView =
+  ## Opens source index using precomputed validation result.
   if not validated.valid:
     raise newException(
       IOError, "invalid source index '" & validated.path & "': " & validated.error

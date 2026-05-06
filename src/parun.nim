@@ -1,8 +1,12 @@
 ## Initializes the terminal, package manager, and main event loop.
+##
+## Notes:
+## - This is the executable entrypoint coordinating UI, worker, and index runtime.
+## - Startup flow: parse CLI -> prepare indexes -> init terminal/worker -> event loop.
+## - Runtime flow is message-driven: keyboard + worker channels feed `core/update`.
 
 import
-  std/
-    [json, os, posix, terminal, selectors, strutils, parseopt, bitops, monotimes, times]
+  std/[json, os, posix, terminal, selectors, strutils, parseopt, monotimes, times, sets]
 import ui/[tui, keyboard, terminal as term]
 import core/[types, state, engine]
 import plugins/manager
@@ -15,6 +19,7 @@ when defined(linux):
   proc malloc_trim(pad: csize_t): cint {.importc, header: "<malloc.h>".}
 
 proc inferSourceFromRepo(repo: string): DataSource {.inline.} =
+  ## Maps repo label to transaction source domain.
   if repo == "nimble": SourceNimble else: SourceSystem
 
 proc printHelp() =
@@ -25,6 +30,11 @@ Options:
   -h, --help                 Show this help and exit
   -v, --version              Show version and exit
   -n, --noinfo               Start with details panel hidden
+  -na, --no-animation        Disable details loading/reveal animation
+      --animation=blocks|fade
+                              Details animation style (default: blocks)
+      --animation-speed=fast|normal|slow
+                              Details animation speed (default: fast)
       --perf-out=PATH        Write runtime perf counters JSON on graceful exit
       --pacman               Enable local pacman source
       --aur                  Enable AUR source
@@ -47,6 +57,7 @@ Examples:
 """
 
 proc writePerfSnapshot(path: string, state: AppState) =
+  ## Writes runtime perf counters JSON for offline profiling.
   if path.len == 0:
     return
   let decode = snapshotColdDecodeStats()
@@ -75,12 +86,16 @@ proc writePerfSnapshot(path: string, state: AppState) =
   writeFile(path, pretty(payload))
 
 proc main() =
+  ## Entrypoint for CLI app lifecycle.
   var
     startShowDetails = true
     explicitSources = false
     usePacman = false
     useAur = false
     useNimble = false
+    detailsAnimationEnabled = true
+    detailAnimationStyle = DetailAnimationBlocks
+    detailAnimationSpeed = DetailAnimationFast
     runInternalRefresh = false
     internalRefreshMergedOnly = false
     internalIndexDir = ""
@@ -88,8 +103,13 @@ proc main() =
     internalRefreshLock = ""
     perfOutPath = ""
 
+  var args = commandLineParams()
+  for i in 0 ..< args.len:
+    if args[i] == "-na":
+      args[i] = "--no-animation"
+
   # CLI Argument Parsing
-  var p = initOptParser()
+  var p = initOptParser(args)
   for kind, key, val in p.getopt():
     case kind
     of cmdLongOption, cmdShortOption:
@@ -102,6 +122,37 @@ proc main() =
         quit(0)
       of "noinfo", "n":
         startShowDetails = false
+      of "no-animation", "na":
+        detailsAnimationEnabled = false
+      of "animation":
+        case val
+        of "blocks", "block", "scramble":
+          detailAnimationStyle = DetailAnimationBlocks
+          detailsAnimationEnabled = true
+        of "fade":
+          detailAnimationStyle = DetailAnimationFade
+          detailsAnimationEnabled = true
+        else:
+          stderr.writeLine(
+            "parun: invalid --animation value '", val, "'; use blocks or fade."
+          )
+          quit(1)
+      of "animation-speed":
+        case val
+        of "fast":
+          detailAnimationSpeed = DetailAnimationFast
+        of "normal":
+          detailAnimationSpeed = DetailAnimationNormal
+        of "slow":
+          detailAnimationSpeed = DetailAnimationSlow
+        of "ultraslow":
+          detailAnimationSpeed = DetailAnimationUltraSlow
+        else:
+          stderr.writeLine(
+            "parun: invalid --animation-speed value '", val,
+            "'; use fast, normal, slow or ultraslow.",
+          )
+          quit(1)
       of "pacman", "p":
         explicitSources = true
         usePacman = true
@@ -186,6 +237,9 @@ proc main() =
     enabledSlots,
     explicitSourceSelection = explicitSources,
   )
+  appState.detailsAnimationEnabled = detailsAnimationEnabled
+  appState.detailAnimationStyle = detailAnimationStyle
+  appState.detailAnimationSpeed = detailAnimationSpeed
   appState.prepareIndexedSources()
   resetColdDecodeStats()
   when defined(linux):
@@ -212,36 +266,32 @@ proc main() =
     let termH = terminalHeight()
     let termW = terminalWidth()
     let listH = max(1, termH - 2)
+    appState.pollIndexUpdates()
 
     # Install/Uninstall Management
     if appState.shouldInstall or appState.shouldUninstall:
       systemTargets.setLen(0)
       nimbleTargets.setLen(0)
-      let selCount = getSelectedCount(appState.selectionBits)
+      let selCount = len(appState.selectedPackages)
       let totalPkgs = currentPackageCount(appState)
       let view = appState.activeView
 
       if selCount > 0:
-        for i, word in appState.selectionBits:
-          if word == 0:
-            continue
-          for bit in 0 .. 63:
-            if testBit(word, bit):
-              let realIdx = i * 64 + bit
-              if realIdx < totalPkgs:
-                let name = copyName(view, realIdx)
-                let repo = copyRepo(view, realIdx)
-                let source = inferSourceFromRepo(repo)
-                if appState.shouldInstall:
-                  if source == SourceNimble:
-                    nimbleTargets.add(name)
-                  else:
-                    systemTargets.add(repo & "/" & name)
-                else:
-                  if source == SourceNimble:
-                    nimbleTargets.add(name)
-                  else:
-                    systemTargets.add(name)
+        for realIdx in 0 ..< totalPkgs:
+          if appState.isSelectedPackage(view, realIdx):
+            let name = copyName(view, realIdx)
+            let repo = copyRepo(view, realIdx)
+            let source = inferSourceFromRepo(repo)
+            if appState.shouldInstall:
+              if source == SourceNimble:
+                nimbleTargets.add(name)
+              else:
+                systemTargets.add(repo & "/" & name)
+            else:
+              if source == SourceNimble:
+                nimbleTargets.add(name)
+              else:
+                systemTargets.add(name)
       elif appState.visibleCount() > 0:
         let idx = int(appState.visibleIdxAt(appState.cursor))
         let name = copyName(view, idx)
@@ -300,6 +350,11 @@ proc main() =
     if appState.showDetails and appState.visibleCount() > 0:
       let view = appState.activeView
       let idx = appState.visibleIdxAt(appState.cursor)
+      if appState.detailScramble.active and (
+        appState.detailScramble.pkgIdx != idx or
+        appState.detailScramble.pkgSlot != appState.activeSlot
+      ):
+        appState.detailScramble.active = false
       if not detailCacheHas(appState.detailsCache, idx):
         var shouldRequestNow = false
         if appState.pendingDetailIdx != idx or
@@ -318,7 +373,9 @@ proc main() =
           let i = int(idx)
           let repo = copyRepo(view, i)
           let source = inferSourceFromRepo(repo)
-          requestDetails(idx, copyName(view, i), repo, source, appState.activeSlot)
+          requestDetails(
+            idx, copyName(view, i), repo, copyUrl(view, i), source, appState.activeSlot
+          )
           appState.detailRequestInFlight = true
           appState.perf.coldDetailRequests.inc()
       else:
@@ -327,6 +384,13 @@ proc main() =
     else:
       appState.pendingDetailIdx = -1
       appState.detailRequestInFlight = false
+      appState.detailScramble.active = false
+
+    if appState.showDetails and (
+      appState.detailRequestInFlight or appState.pendingDetailIdx >= 0 or
+      (appState.detailsAnimationEnabled and appState.detailScramble.active)
+    ):
+      appState.needsRedraw = true
 
     # Event Waiting (Input or Resize)
     let ready = selector.select(16)

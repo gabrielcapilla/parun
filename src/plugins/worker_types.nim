@@ -1,3 +1,8 @@
+## Worker protocol and batch-building primitives.
+##
+## Notes:
+## - `WorkerReq` is the cross-thread command envelope.
+## - `BatchBuilder` accumulates compact SoA payloads before channel send.
 import std/[tables, monotimes, times]
 import ../core/types
 import contracts
@@ -13,7 +18,7 @@ type
     ReqStop
 
   WorkerReq* = object
-    query*, pkgName*, pkgRepo*: string
+    query*, pkgName*, pkgRepo*, pkgUrl*: string
     searchId*: int
     pkgIdx*: int32
     source*: DataSource
@@ -48,9 +53,11 @@ const
 const BatchSize* = 64 * 1024
 
 func getToolDef*(tool: PkgManagerType): lent ToolDef {.inline.} =
+  ## Returns plugin contract used by worker/manager for this tool.
   getPluginContract(tool)
 
 func initBatchBuilder*(source: DataSource, mode: SearchMode): BatchBuilder =
+  ## Initializes reusable batch buffers with pre-sized capacities.
   result.source = source
   result.mode = mode
   result.soa.hot.locators = newSeqOfCap[uint32](5000)
@@ -70,6 +77,7 @@ proc flushBatch*(
     startTime: MonoTime,
     force: bool = false,
 ) =
+  ## Sends current batch as `MsgSearchResults` and resets builder buffers.
   if bb.soa.hot.locators.len > 0 or force:
     let dur = int((getMonoTime() - startTime).inMilliseconds())
     resChan.send(
@@ -100,6 +108,7 @@ proc flushBatch*(
 func addPackage*(
     bb: var BatchBuilder, name, ver: openArray[char], repo: string, installed: bool
 ) =
+  ## Appends one package record into current batch if capacity permits.
   if bb.textChunk.len + name.len + ver.len > BatchSize:
     return
 

@@ -1,5 +1,13 @@
-import std/[strutils, bitops]
+## Hot-path filtering over immutable source indexes.
+##
+## Notes:
+## - Input query is normalized via `getEffectiveQuery`.
+## - Empty query uses identity view (`visibleAll=true`) unless `installed/` filter is active.
+## - Non-empty query narrows candidates by first-byte bucket before SIMD scoring.
+## - Results are capped (`ResultsBuffer` size) and then score-sorted.
+import std/[strutils, bitops, sets]
 import types
+import state_soa
 import ../storage/indexes
 import ../utils/simd
 
@@ -11,7 +19,11 @@ proc filterIndices*(
     visibleAllCount: var int32,
     perf: ptr PerfCounters = nil,
 ) =
-  ## Filtering System (Hot Path).
+  ## Produces visible package ids for the current query.
+  ##
+  ## Performance contract:
+  ## - avoid heap allocations in the candidate loop
+  ## - update perf counters when provided
   if not perf.isNil:
     perf[].hotFilterCalls.inc()
   visibleAll = false
@@ -94,7 +106,7 @@ proc filterIndices*(
 proc filterBySelection*(
     selectionBits: openArray[uint64], totalPkgs: int, results: var seq[int32]
 ) =
-  ## Filters the visible list to show only selected items.
+  ## Materializes only selected package ids into `results`.
   results.setLen(0)
   for i, word in selectionBits:
     if word == 0:
@@ -104,3 +116,15 @@ proc filterBySelection*(
         let realIdx = i * 64 + bit
         if realIdx < totalPkgs:
           results.add(int32(realIdx))
+
+proc filterBySelection*(
+    selectedPackages: HashSet[string],
+    view: ptr SourceIndexView,
+    results: var seq[int32],
+) =
+  ## Materializes selected package ids in the active source view.
+  results.setLen(0)
+  let totalPkgs = packageCount(view)
+  for i in 0 ..< totalPkgs:
+    if packageSelectionKey(view, i) in selectedPackages:
+      results.add(int32(i))

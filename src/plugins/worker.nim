@@ -1,3 +1,9 @@
+## Background worker thread implementation.
+##
+## Notes:
+## - Owns all blocking I/O (package manager commands, metadata cache reads, HTTP).
+## - Streams package catalogs into compact SoA batches over channels.
+## - Maintains packed caches for details + metadata to minimize repeated work.
 import std/[os, osproc, strutils, streams, monotimes, httpclient, parseutils]
 import ../core/types
 import ../utils/memory_accounting
@@ -14,6 +20,7 @@ proc buildWorkerMemoryReport(
     detailBatch: seq[WorkerReq],
     client: HttpClient,
 ): WorkerMemoryReport =
+  ## Snapshot used by runtime diagnostics (`ReqDiagnostics`).
   var cacheSection = MemorySection(name: "worker_caches")
   cacheSection.addMetric(
     "details_cache",

@@ -1,6 +1,8 @@
+## Parsing helpers for pacman textual outputs.
 import std/[strutils, tables]
 
 func parseInstalledPackages*(output: string): Table[string, bool] =
+  ## Builds a set-like table from `pacman -Q` output.
   result = initTable[string, bool](512)
   for line in output.split('\n'):
     if line.len == 0:
@@ -19,4 +21,5 @@ func parseInstalledPackages*(output: string): Table[string, bool] =
       result[first] = true
 
 func isPackageInstalled*(line: string): bool =
+  ## Detects installed marker in repository listing output.
   return line.contains("[installed]") or line.contains("[instalado]")

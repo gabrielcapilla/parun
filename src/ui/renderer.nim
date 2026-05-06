@@ -1,7 +1,12 @@
 ## UI component rendering.
 ## Split from tui.nim to keep modules manageable.
+##
+## Notes:
+## - Consumes immutable index views + `AppState` to build one terminal frame.
+## - Rendering is string-buffer based; no direct per-cell terminal writes.
+## - Details panel uses cache-first policy and displays lightweight loading marker on misses.
 
-import std/[monotimes, strutils, times]
+import std/[monotimes, strutils, times, unicode]
 import ../core/[types, state]
 import ../storage/indexes
 import ../utils/utils
@@ -28,6 +33,7 @@ const
   Spaces50* = "                                                  "
 
 proc appendSpaces*(buffer: var string, count: int) =
+  ## Fast-path space append using 50-char chunk constant.
   var p = count
   while p >= 50:
     buffer.add(Spaces50)
@@ -123,14 +129,97 @@ proc appendRow*(
   if isCursor:
     buffer.add(Reset)
 
-proc loadingIndicatorLine(width: int, row: int, phase: int): string =
-  discard phase
+proc loadingIndicatorLine(
+    width: int, row: int, phase: int, style: DetailAnimationStyle
+): string =
+  ## Minimal loading placeholder in details panel.
   if width <= 0:
     return ""
 
+  const LoadingText = "loading details"
   if row == 0:
-    return AnsiDim & "..." & AnsiReset
+    result = AnsiDim
+    let reveal = min(LoadingText.len, phase mod (LoadingText.len + 1))
+    for i in 0 ..< LoadingText.len:
+      if i < reveal or LoadingText[i] == ' ':
+        result.add(LoadingText[i])
+      else:
+        case style
+        of DetailAnimationBlocks:
+          case (phase + i * 3) and 3
+          of 0:
+            result.add("░")
+          of 1:
+            result.add("▒")
+          of 2:
+            result.add("▓")
+          else:
+            result.add("█")
+        of DetailAnimationFade:
+          result.add("·")
+    result.add(AnsiReset)
+    return
   return ""
+
+func scrambleRank(seed: uint32, pos: int): uint32 {.inline.} =
+  ## Stable per-cell rank: avoids storing/shuffling indices in the render loop.
+  var x = seed xor uint32(pos * 0x45d9f3b)
+  x = (x xor (x shr 16)) * 0x7feb352d'u32
+  x = (x xor (x shr 15)) * 0x846ca68b'u32
+  x xor (x shr 16)
+
+proc scrambledDetailLine(
+    text: string,
+    pkgIdx: int32,
+    row, elapsedMs, durationMs: int,
+    style: DetailAnimationStyle,
+): string =
+  if text.len == 0 or durationMs <= 0 or elapsedMs >= durationMs:
+    return text
+
+  let width = visibleWidth(text)
+  if width <= 0:
+    return text
+
+  let resolvedLimit = uint32((uint64(width) * uint64(elapsedMs)) div uint64(durationMs))
+  let seed = uint32(pkgIdx) xor (uint32(row) * 0x9e3779b1'u32)
+  result = newStringOfCap(text.len + width * 2)
+  var i = 0
+  var cell = 0
+  while i < text.len:
+    if text[i] == '\e':
+      let start = i
+      inc i
+      if i < text.len and text[i] == '[':
+        inc i
+        while i < text.len and text[i] != 'm':
+          inc i
+        if i < text.len:
+          inc i
+      result.add(text[start ..< i])
+      continue
+
+    let rl = text.runeLenAt(i)
+    if text[i] == ' ' or scrambleRank(seed, cell) mod uint32(width) < resolvedLimit:
+      result.add(text[i ..< i + rl])
+    else:
+      case style
+      of DetailAnimationBlocks:
+        case (scrambleRank(seed xor uint32(elapsedMs div 24), cell) and 3)
+        of 0:
+          result.add("░")
+        of 1:
+          result.add("▒")
+        of 2:
+          result.add("▓")
+        else:
+          result.add("█")
+      of DetailAnimationFade:
+        result.add(AnsiDim)
+        result.add(text[i ..< i + rl])
+        result.add(AnsiReset)
+    i += rl
+    cell.inc()
 
 proc renderDetails*(
     buffer: var string, state: var AppState, r, listH, detailTextW: int
@@ -172,13 +261,33 @@ proc renderDetails*(
         let effectiveIdx = contentRowIndex + state.detailScroll
         if effectiveIdx < state.wrappedDetails.len:
           textContent = state.wrappedDetails[effectiveIdx].replace("\t", "  ")
+          if state.detailsAnimationEnabled and state.detailScramble.active and
+              state.detailScramble.pkgIdx == curIdx and
+              state.detailScramble.pkgSlot == state.activeSlot:
+            let elapsedMs =
+              int((getMonoTime() - state.detailScramble.startedAt).inMilliseconds())
+            if elapsedMs >= state.detailScramble.durationMs:
+              state.detailScramble.active = false
+            else:
+              textContent = scrambledDetailLine(
+                textContent, curIdx, effectiveIdx, elapsedMs,
+                state.detailScramble.durationMs, state.detailAnimationStyle,
+              )
+              state.needsRedraw = true
           state.perf.coldDetailLines.inc()
       else:
         if contentRowIndex == 0:
           state.perf.coldDetailCacheMisses.inc()
-        let loadingMs = int((getMonoTime() - state.detailTargetSince).inMilliseconds())
-        let phase = loadingMs div 80
-        textContent = loadingIndicatorLine(detailTextW, contentRowIndex, phase)
+        if state.detailsAnimationEnabled:
+          let loadingMs =
+            int((getMonoTime() - state.detailTargetSince).inMilliseconds())
+          let phase = loadingMs div 80
+          textContent = loadingIndicatorLine(
+            detailTextW, contentRowIndex, phase, state.detailAnimationStyle
+          )
+          state.needsRedraw = true
+        elif contentRowIndex == 0:
+          textContent = AnsiDim & "loading details" & AnsiReset
 
     let visLen = visibleWidth(textContent)
     if visLen > detailTextW:
@@ -191,7 +300,7 @@ proc renderDetails*(
 proc renderStatusBar*(
     buffer: var string,
     visibleCount, totalCount: int,
-    selectionBits: openArray[uint64],
+    selectedCount: int,
     viewingSelection: bool,
     dataSource: DataSource,
     searchMode: SearchMode,
@@ -207,12 +316,11 @@ proc renderStatusBar*(
     else:
       2 + visLenStr.len + 1 + totalLenStr.len
 
-  let selCount = getSelectedCount(selectionBits)
   var statusPrefix = ""
   var statusPrefixLen = 0
-  if selCount > 0:
-    statusPrefix = ColorSel & "[" & $selCount & "] " & AnsiReset
-    statusPrefixLen = 3 + ($selCount).len
+  if selectedCount > 0:
+    statusPrefix = ColorSel & "[" & $selectedCount & "] " & AnsiReset
+    statusPrefixLen = 3 + ($selectedCount).len
 
   var modeStr = ""
   var modeStrLen = 0
@@ -227,8 +335,8 @@ proc renderStatusBar*(
       modeStr = ColorModeAur & "[Aur]" & AnsiReset
       modeStrLen = 5
     else:
-      modeStr = ColorModeLocal & "[Local]" & AnsiReset
-      modeStrLen = 7
+      modeStr = ColorModeLocal & "[Pacman]" & AnsiReset
+      modeStrLen = 8
 
   var statusMsgStr = ""
   if statusMessage.len > 0:

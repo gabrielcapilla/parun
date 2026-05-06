@@ -1,10 +1,16 @@
 ##
-## Unified Cache Manager
+## Unified cache manager.
 ##
 ## Consolidates:
-## - Metadata Management (Rotation, download)
-## - Binary Cache Format (DOP optimization)
-## - Zero-Allocation JSON Parser (Stream-based)
+## - Metadata fetch/rotation for AUR and Nimble package lists.
+## - Legacy packed binary metadata used by fallback detail paths.
+## - Streaming JSON parsing used by `.prix` index construction.
+##
+## Notes:
+## - This module is the persistence boundary for AUR/Nimble metadata.
+## - Runtime search uses immutable `.prix` indexes. Current Nimble details use
+##   repository URLs embedded in `nimble.prix`; `packages.json`/`packages.bin`
+##   are only needed by legacy fallback paths or explicit cache refreshes.
 ##
 
 import std/[os, osproc, times, streams, parsejson, memfiles, strutils, tables]
@@ -25,7 +31,7 @@ const
   NimbleMetaUrl* =
     "https://raw.githubusercontent.com/nim-lang/packages/refs/heads/master/packages.json"
 
-  CacheMaxAgeHours* = 1
+  CacheMaxAgeHours* = 8
   BinaryMagic = "PARU"
   BinaryVersion = 2
 
@@ -45,8 +51,9 @@ type
 
   NimbleMeta* = tuple[url: string, tags: seq[string]]
 
-  ZeroAllocCallback* =
-    proc(name: openArray[char], version: openArray[char]) {.closure, gcsafe.}
+  ZeroAllocCallback* = proc(
+    name: openArray[char], version: openArray[char], url: openArray[char]
+  ) {.closure, gcsafe.}
 
 proc safeRemove(path: string) =
   if not fileExists(path):
@@ -74,8 +81,8 @@ proc atomicReplace(srcPath: string, dstPath: string): bool =
       return false
 
 proc validateCacheFile*(path: string): bool =
-  ## Validates cache file integrity
-  ## Checks: existence, minimum size, magic header
+  ## Validates binary cache structure.
+  ## Checks: existence, minimum size, magic header + version.
   if not fileExists(path):
     return false
 
@@ -113,7 +120,9 @@ proc writeHeader(s: Stream, count: uint32) =
   s.write(count)
 
 proc convertJsonToBinary*(jsonPath, binPath: string): bool =
-  ## Converts a JSON package list to the binary format.
+  ## Converts metadata JSON to compact binary cache format.
+  ## This legacy format stores package name/version pairs and is not the primary
+  ## runtime search index.
   var fs = newFileStream(jsonPath, fmRead)
   if fs == nil:
     return false
@@ -194,7 +203,8 @@ proc convertJsonToBinary*(jsonPath, binPath: string): bool =
     return false
 
 template withBinaryCache*(binPath: string, nameId, verId, body: untyped) =
-  ## Iterates over the binary cache using memory mapping.
+  ## Iterates binary cache entries with zero per-entry string allocation.
+  ## The mapped format contains name/version slices only.
   if fileExists(binPath):
     var mf = memfiles.open(binPath)
     if mf.mem != nil:
@@ -237,7 +247,9 @@ template withBinaryCache*(binPath: string, nameId, verId, body: untyped) =
       mf.close()
 
 proc streamParseJsonZeroAlloc*(jsonPath: string, callback: ZeroAllocCallback): bool =
-  ## Zero-allocation JSON stream parser for uncompressed files.
+  ## Streams large metadata JSON and emits `(name, version, url)` slices.
+  ## The parser is used while building `.prix` files and avoids per-package
+  ## object allocation for uncompressed package-list JSON.
   let fs = newFileStream(jsonPath, fmRead)
   if fs == nil:
     return false
@@ -249,8 +261,10 @@ proc streamParseJsonZeroAlloc*(jsonPath: string, callback: ZeroAllocCallback): b
     var currentKey = ""
     var inNameValue = false
     var inVersionValue = false
+    var inUrlValue = false
     var nameStr: string = ""
     var verStr: string = ""
+    var urlStr: string = ""
 
     parser.next()
     while parser.kind != jsonEof:
@@ -259,28 +273,37 @@ proc streamParseJsonZeroAlloc*(jsonPath: string, callback: ZeroAllocCallback): b
         inObject = true
         inNameValue = false
         inVersionValue = false
+        inUrlValue = false
         parser.next()
       of jsonObjectEnd:
         if nameStr.len > 0:
           if verStr.len == 0:
             verStr = "git"
-          callback(nameStr, verStr)
+          callback(nameStr, verStr, urlStr)
         nameStr = ""
         verStr = ""
+        urlStr = ""
         inObject = false
         parser.next()
       of jsonString:
-        if inObject and not inNameValue and not inVersionValue:
+        if inObject and not inNameValue and not inVersionValue and not inUrlValue:
           currentKey = parser.str
           if currentKey.cmpIgnoreCase("name") == 0:
             inNameValue = true
             inVersionValue = false
+            inUrlValue = false
           elif currentKey.cmpIgnoreCase("version") == 0:
             inVersionValue = true
             inNameValue = false
+            inUrlValue = false
+          elif currentKey.cmpIgnoreCase("url") == 0:
+            inNameValue = false
+            inVersionValue = false
+            inUrlValue = true
           else:
             inNameValue = false
             inVersionValue = false
+            inUrlValue = false
           parser.next()
         elif inNameValue:
           nameStr = parser.str
@@ -289,6 +312,10 @@ proc streamParseJsonZeroAlloc*(jsonPath: string, callback: ZeroAllocCallback): b
         elif inVersionValue:
           verStr = parser.str
           inVersionValue = false
+          parser.next()
+        elif inUrlValue:
+          urlStr = parser.str
+          inUrlValue = false
           parser.next()
         else:
           parser.next()
@@ -307,6 +334,7 @@ proc streamParseJsonZeroAlloc*(jsonPath: string, callback: ZeroAllocCallback): b
     return false
 
 proc getStreamedNimbleMeta*(jsonPath: string): Table[string, NimbleMeta] =
+  ## Extracts Nimble package URL/tags map from JSON.
   result = initTable[string, NimbleMeta]()
   let fs = newFileStream(jsonPath, fmRead)
   if fs == nil:
@@ -378,6 +406,7 @@ proc getStreamedNimbleMeta*(jsonPath: string): Table[string, NimbleMeta] =
       discard
 
 proc getCachePath*(): string =
+  ## Resolves cache root path, honoring `PARUN_CACHE_DIR` when set.
   let envOverride = getEnv(CacheDirEnvVar, "").strip()
   let cacheDir =
     if envOverride.len > 0:
@@ -392,6 +421,7 @@ proc getCachePath*(): string =
   return cacheDir
 
 proc getCacheStatus*(cache: PackageCache): CacheStatus =
+  ## Returns freshness status from presence + age checks.
   let cacheDir = getCachePath()
   let binPath = cacheDir / cache.binPath
   let stampPath = cacheDir / cache.stampPath
@@ -423,6 +453,7 @@ proc downloadUncompressed(url: string, outputPath: string): bool =
   return downloadToPath(url, outputPath)
 
 proc validateJsonFile*(path: string): bool =
+  ## Performs lightweight JSON validity probe.
   ## Validates that a file contains valid JSON
   ## Used as integrity check for downloaded metadata
   if not fileExists(path):
@@ -451,6 +482,7 @@ proc validateJsonFile*(path: string): bool =
     return false
 
 proc ensureJsonAvailable*(cache: PackageCache): bool =
+  ## Ensures JSON metadata file exists locally (download if missing).
   let cacheDir = getCachePath()
   let jsonPath = cacheDir / cache.jsonPath
   if fileExists(jsonPath) and validateJsonFile(jsonPath):
@@ -465,6 +497,7 @@ proc ensureJsonAvailable*(cache: PackageCache): bool =
   return atomicReplace(downloadPath, jsonPath)
 
 proc refreshCache*(cache: var PackageCache, keepJson: bool = false): bool =
+  ## Refreshes cache from network source and rebuilds binary snapshot.
   let cacheDir = getCachePath()
   let jsonPath = cacheDir / cache.jsonPath
   let binPath = cacheDir / cache.binPath
@@ -520,6 +553,7 @@ proc refreshCache*(cache: var PackageCache, keepJson: bool = false): bool =
   return true
 
 proc loadOrRefreshCache*(cache: var PackageCache, keepJson: bool = false): bool =
+  ## Fast path: validate current binary, otherwise refresh.
   let cacheDir = getCachePath()
   let binPath = cacheDir / cache.binPath
 
@@ -534,6 +568,7 @@ proc loadOrRefreshCache*(cache: var PackageCache, keepJson: bool = false): bool 
     return refreshCache(cache, keepJson)
 
 proc safeLoadOrRefreshCache*(cache: var PackageCache, keepJson: bool = false): bool =
+  ## Same as `loadOrRefreshCache` but swallows recoverable exceptions.
   ## Safely loads cache with validation and automatic cleanup on corruption
   let cacheDir = getCachePath()
   let binPath = cacheDir / cache.binPath
@@ -556,6 +591,7 @@ proc safeLoadOrRefreshCache*(cache: var PackageCache, keepJson: bool = false): b
   return loadOrRefreshCache(cache, keepJson)
 
 proc initAurCache*(): PackageCache =
+  ## Constructs AUR cache descriptor.
   PackageCache(
     jsonPath: AurJsonCache,
     binPath: AurBinCache,
@@ -566,6 +602,7 @@ proc initAurCache*(): PackageCache =
   )
 
 proc initNimbleCache*(): PackageCache =
+  ## Constructs Nimble cache descriptor.
   PackageCache(
     jsonPath: NimbleJsonCache,
     binPath: NimbleBinCache,

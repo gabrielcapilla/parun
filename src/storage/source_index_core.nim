@@ -1,9 +1,16 @@
+## Core types/constants for immutable `.prix` source indexes.
+##
+## Notes:
+## - This file is the schema contract shared by builder, validator, and runtime reader.
+## - Version 6 adds per-package URL sections used by Nimble details; version 5
+##   indexes remain readable as legacy artifacts without URL sections.
+## - Section names/order and flag semantics must remain backward-compatible.
 import std/[memfiles, tables]
 
 const
   SourceIndexMagic* = "PRIX"
-  SourceIndexVersion* = 5'u32
-  LegacySourceIndexVersion* = 4'u32
+  SourceIndexVersion* = 6'u32
+  LegacySourceIndexVersion* = 5'u32
   SourceIndexHeaderBytes* = 32'u32
   SectionNameBytes* = 16
   BucketCount* = 256
@@ -34,6 +41,9 @@ type SourceSectionId* = enum
   ssRepoOffsets
   ssRepoLens
   ssRepoBlob
+  ssUrlOffsets
+  ssUrlLens
+  ssUrlBlob
   ssBucketOffsets
   ssBucketLens
   ssBucketIds
@@ -48,6 +58,10 @@ type
     name*: string
     version*: string
     repo*: string
+    ## Optional upstream URL. Current Nimble indexes store the repository URL so
+    ## the details worker can fetch the package `.nimble` manifest without
+    ## materializing `packages.json`/`packages.bin` during lookup.
+    url*: string
     installed*: bool
 
   SourceIndexStats* = object
@@ -79,8 +93,8 @@ type
     buckets*: array[BucketCount, seq[uint32]]
     repoOffsets*, repoLens*, repoIndices*, flags*: string
     nameOffsets*, nameLens*, lowerOffsets*, lowerLens*: string
-    verOffsets*, verLens*: string
-    nameBlob*, lowerBlob*, verBlob*, repoBlob*: string
+    verOffsets*, verLens*, urlOffsets*, urlLens*: string
+    nameBlob*, lowerBlob*, verBlob*, repoBlob*, urlBlob*: string
     emittedCount*: int
     usesWideWords*: bool
 
@@ -114,6 +128,7 @@ type
     headerFlags*: int
     versionBlobMeta*: CompressedBlobMeta
     repoBlobMeta*: CompressedBlobMeta
+    urlBlobMeta*: CompressedBlobMeta
     mapped*: bool
 
   SectionPayload* = object
@@ -123,7 +138,8 @@ type
 const SectionNames*: array[SourceSectionId, string] = [
   "name_off", "name_len", "name_blob", "lower_off", "lower_len", "lower_blob",
   "ver_off", "ver_len", "ver_blob", "repo_idx", "flags", "repo_off", "repo_len",
-  "repo_blob", "bucket_off", "bucket_len", "bucket_ids",
+  "repo_blob", "url_off", "url_len", "url_blob", "bucket_off", "bucket_len",
+  "bucket_ids",
 ]
 
 type ColdDecodeStats* = object
@@ -134,12 +150,14 @@ type ColdDecodeStats* = object
   decodedBytes*: uint64
 
 proc sourceTag*(kind: IndexedSourceKind): string =
+  ## Stable textual tag used in filenames and CLI source encoding.
   case kind
   of iskSystem: "system"
   of iskAur: "aur"
   of iskNimble: "nimble"
 
 proc findSectionId*(name: string): SourceSectionId =
+  ## Resolves section directory name to enum id.
   for section in SourceSectionId:
     if SectionNames[section] == name:
       return section

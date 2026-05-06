@@ -1,3 +1,4 @@
+## Worker-side command/network execution helpers.
 import std/[os, osproc, httpclient, net]
 import ../core/types
 
@@ -37,6 +38,7 @@ proc downloadWithRetry*(client: HttpClient, url: string, maxRetries: int = 3): s
   )
 
 proc clampDetailPayload*(content: string): string =
+  ## Applies hard payload cap for details panel safety.
   if content.len <= MaxDetailPayloadBytes:
     return content
   const Suffix = "\n\n[truncated]"

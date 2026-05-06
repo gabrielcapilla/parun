@@ -1,7 +1,16 @@
+## Structural validator for `.prix` index files.
+##
+## Notes:
+## - Runs before mapping to fail fast on malformed/corrupt artifacts.
+## - Checks header, directory ranges, section-size invariants, and
+##   compressed-blob consistency.
+## - Accepts legacy version 5 indexes without URL sections while requiring
+##   URL offset/length/blob sections for current version 6 indexes.
 import std/[memfiles, os, tables]
 import source_index_core, source_index_codec
 
 proc validateSourceIndex*(path: string): ValidatedSourceIndex =
+  ## Validates on-disk index and returns a machine-readable verdict.
   result.path = path
   if not fileExists(path):
     result.error = "index file not found"
@@ -79,15 +88,20 @@ proc validateSourceIndex*(path: string): ValidatedSourceIndex =
       return
     sectionRanges[sectionId] = SourceSectionRange(offset: offset, size: size)
 
+  let hasUrlSections = version >= SourceIndexVersion.int
   for section in SourceSectionId:
     if not seenSections.hasKey(section):
+      if not hasUrlSections and section in {ssUrlOffsets, ssUrlLens, ssUrlBlob}:
+        continue
       result.error = "missing required section: " & SectionNames[section]
       return
 
   for section in [
-    ssNameOffsets, ssLowerOffsets, ssVersionOffsets, ssRepoOffsets, ssBucketOffsets,
-    ssBucketLens, ssBucketIds,
+    ssNameOffsets, ssLowerOffsets, ssVersionOffsets, ssRepoOffsets, ssUrlOffsets,
+    ssBucketOffsets, ssBucketLens, ssBucketIds,
   ]:
+    if not hasUrlSections and section == ssUrlOffsets:
+      continue
     var found = false
     for idx in 0 ..< result.sectionCount:
       let entryBase = directoryStart + idx * (SectionNameBytes + 8 + 8)

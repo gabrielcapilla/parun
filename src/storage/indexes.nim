@@ -1,4 +1,6 @@
 ## Source index facade.
+##
+## Single import surface for schema + codec + builder + validator + runtime reader.
 
 import
   source_index_core, source_index_codec, source_index_builder, source_index_validation,

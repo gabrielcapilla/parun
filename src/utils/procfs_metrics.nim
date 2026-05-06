@@ -1,3 +1,4 @@
+## Linux procfs sampling helpers for runtime memory budgets.
 import std/[os, strutils]
 
 type ProcfsSample* = object
@@ -32,6 +33,7 @@ proc parseProcKb(line: string): int =
   0
 
 proc readProcfsSample*(pid: int): ProcfsSample =
+  ## Reads key RSS/PSS/private-dirty metrics from `/proc/<pid>`.
   result.pid = pid
 
   let procDir = "/proc/" & $pid

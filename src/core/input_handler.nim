@@ -98,9 +98,14 @@ func moveCursorWordRight*(state: var AppState) =
     while state.searchCursor > 0 and state.searchBuffer[state.searchCursor - 1] == ' ':
       state.searchCursor.dec()
 
+## Applies one normalized key event to input/edit/navigation state.
+##
+## This function is intentionally side-effectful over `AppState`; it does not
+## trigger filtering itself. Filtering/source routing is handled by
+## `core/input_system.nim`.
 proc handleInput*(state: var AppState, k: char, listHeight: int) =
   case k
-  of KeyUp:
+  of KeyUp, KeyCtrlK:
     if state.visibleCount() > 0:
       state.cursor = min(state.visibleCount() - 1, state.cursor + 1)
       state.detailScroll = 0

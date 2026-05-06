@@ -1,9 +1,17 @@
-import std/bitops
+## SoA helpers over in-memory package batches.
+##
+## Notes:
+## - These helpers are legacy-compatible utilities used by worker/UI glue.
+## - They operate on packed arenas (`textArena`, `repoArena`) and avoid
+##   intermediate allocations when appending into existing buffers.
+import std/[bitops, sets]
 import types
+import ../storage/indexes
 
 proc appendFromArena*(
     textArena: openArray[char], offset, len: int, buffer: var string, maxLen: int = -1
 ) {.inline.} =
+  ## Appends a bounded slice from `textArena` into `buffer`.
   if offset < 0 or len < 0:
     return
 
@@ -31,6 +39,7 @@ proc appendName*(
     buffer: var string,
     maxLen: int = -1,
 ) =
+  ## Appends package name slice for row `idx`.
   let offset = int(soa.hot.locators[idx])
   let len = int(soa.hot.nameLens[idx])
   appendFromArena(textArena, offset, len, buffer, maxLen)
@@ -42,6 +51,7 @@ proc appendVersion*(
     buffer: var string,
     maxLen: int = -1,
 ) =
+  ## Appends package version slice for row `idx`.
   let nameLen = int(soa.hot.nameLens[idx])
   let offset = int(soa.hot.locators[idx]) + nameLen
   let len = int(soa.cold.verLens[idx])
@@ -56,6 +66,7 @@ proc appendRepo*(
     buffer: var string,
     maxLen: int = -1,
 ) =
+  ## Appends repository name for row `idx`.
   let rIdx = soa.cold.repoIndices[idx]
   let rOffset = int(repoOffsets[rIdx])
   let rLen = int(repoLens[int(rIdx)])
@@ -118,17 +129,39 @@ func getPkgId*(
 func isSelected*(
     selectionBits: openArray[uint64], idx: int
 ): bool {.inline, noSideEffect.} =
+  ## Tests whether `idx` bit is set in packed selection bitmap.
   let wordIdx = idx div 64
   if wordIdx >= selectionBits.len:
     return false
   testBit(selectionBits[wordIdx], idx mod 64)
 
 proc toggleSelection*(state: var AppState, idx: int) =
+  ## Flips the bit for `idx`, growing bitmap when required.
   let wordIdx = idx div 64
   if wordIdx >= state.selectionBits.len:
     state.selectionBits.setLen(wordIdx + 1)
   state.selectionBits[wordIdx] =
     state.selectionBits[wordIdx] xor (1'u64 shl (idx mod 64))
+
+proc packageSelectionKey*(view: ptr SourceIndexView, idx: int): string =
+  ## Stable selection identity across source switches and merged views.
+  result = copyRepo(view, idx)
+  result.add("/")
+  result.add(copyName(view, idx))
+
+func isSelectedPackage*(selectedPackages: HashSet[string], key: string): bool =
+  key in selectedPackages
+
+proc isSelectedPackage*(state: AppState, view: ptr SourceIndexView, idx: int): bool =
+  state.selectedPackages.isSelectedPackage(packageSelectionKey(view, idx))
+
+proc toggleSelection*(state: var AppState, view: ptr SourceIndexView, idx: int) =
+  ## Flips source-independent package selection for `idx`.
+  let key = packageSelectionKey(view, idx)
+  if key in state.selectedPackages:
+    state.selectedPackages.excl(key)
+  else:
+    state.selectedPackages.incl(key)
 
 func getSelectedCount*(selectionBits: openArray[uint64]): int {.noSideEffect.} =
   result = 0

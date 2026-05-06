@@ -1,16 +1,25 @@
+## Input orchestration layer.
+##
+## Notes:
+## - `input_handler` edits cursor/text/selection toggles.
+## - This module additionally decides source switching based on prefixes:
+##   `aur/` -> SlotAur, `nim*/` -> SlotNimble, otherwise base source.
+## - It then triggers hot-path filtering and status-message updates.
 import std/[monotimes, strutils]
 import types, state, input_handler
 import search_system
+import ../storage/indexes
 
+## Consumes one key and updates derived search/source state.
+##
+## This is the highest-level input reducer used by the UI tick loop.
 proc processInput*(state: var AppState, k: char, listHeight: int) =
   if k == KeyCtrlS:
     state.viewingSelection = not state.viewingSelection
     state.cursor = 0
     state.scroll = 0
     if state.viewingSelection:
-      filterBySelection(
-        state.selectionBits, state.currentPackageCount(), state.visibleIndices
-      )
+      filterBySelection(state.selectedPackages, state.activeView, state.visibleIndices)
       state.visibleAll = false
       state.visibleAllCount = 0
     else:
@@ -38,8 +47,14 @@ proc processInput*(state: var AppState, k: char, listHeight: int) =
       state.searchBuffer.startsWith("n/")
     let isAurQuery =
       state.searchBuffer.startsWith("aur/") or state.searchBuffer.startsWith("a/")
+    let isInstalledQuery =
+      state.searchBuffer.startsWith("installed/") or state.searchBuffer.startsWith("i/")
 
-    if isNimbleQuery:
+    if isInstalledQuery:
+      blockedSwitch = not switchToMerged(state)
+      if blockedSwitch:
+        state.statusMessage = "Combined index unavailable"
+    elif isNimbleQuery:
       blockedSwitch = not switchToNimble(state)
       if blockedSwitch:
         if SlotNimble in state.enabledSlots:
@@ -62,6 +77,10 @@ proc processInput*(state: var AppState, k: char, listHeight: int) =
 
     if blockedSwitch:
       state.clearVisible()
+    elif not valid(state.activeView):
+      state.clearVisible()
+      state.statusMessage = "Indexing..."
+      state.indexRefreshInFlight = true
     else:
       filterIndices(
         state.searchBuffer,

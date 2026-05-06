@@ -1,24 +1,34 @@
+## Low-level encoding/decoding primitives for `.prix` sections.
+##
+## Notes:
+## - Exposes LE helpers, packed-word transforms, and cold-blob compression.
+## - Runtime decode stats are tracked globally for perf snapshots.
 import source_index_core
 
 var coldDecodeStats: ColdDecodeStats
 
 proc resetColdDecodeStats*() =
+  ## Clears global decode counters.
   coldDecodeStats = default(ColdDecodeStats)
 
 proc snapshotColdDecodeStats*(): ColdDecodeStats =
+  ## Returns current decode counters snapshot.
   coldDecodeStats
 
 proc addLe16*(dst: var string, value: uint16) =
+  ## Appends a little-endian u16.
   dst.add(char(value and 0xFF))
   dst.add(char((value shr 8) and 0xFF))
 
 proc addLe32*(dst: var string, value: uint32) =
+  ## Appends a little-endian u32.
   dst.add(char(value and 0xFF))
   dst.add(char((value shr 8) and 0xFF))
   dst.add(char((value shr 16) and 0xFF))
   dst.add(char((value shr 24) and 0xFF))
 
 proc addLe64*(dst: var string, value: uint64) =
+  ## Appends a little-endian u64.
   for shift in countup(0, 56, 8):
     dst.add(char((value shr shift) and 0xFF))
 
@@ -43,6 +53,7 @@ proc readU16At*(data: ptr UncheckedArray[byte], index: int): int {.inline.} =
 proc readPackedWordAt*(
     data: ptr UncheckedArray[byte], index: int, wordBytes: int
 ): int {.inline.} =
+  ## Reads 24-bit or 32-bit packed integer at element index.
   let base = index * wordBytes
   if wordBytes == PackedWord24Bytes:
     int(data[base]) or (int(data[base + 1]) shl 8) or (int(data[base + 2]) shl 16)
@@ -51,11 +62,13 @@ proc readPackedWordAt*(
       (int(data[base + 3]) shl 24)
 
 proc checkedU16*(value: int, label: string): uint16 =
+  ## Range-check helper used during index build.
   if value < 0 or value > high(uint16).int:
     raise newException(ValueError, label & " exceeds uint16 range")
   uint16(value)
 
 proc checkedU32*(value: int, label: string): uint32 =
+  ## Range-check helper used during index build.
   if value < 0 or value > high(uint32).int:
     raise newException(ValueError, label & " exceeds uint32 range")
   uint32(value)
@@ -282,6 +295,7 @@ proc encodeBlobRleBlock(
   dst.len - before
 
 proc encodeColdBlob*(raw: string): string =
+  ## Encodes cold blob into block-indexed container.
   let blockCount = (raw.len + ColdBlobBlockBytes - 1) div ColdBlobBlockBytes
   var payload = newStringOfCap(
     raw.len + (if blockCount > 0: blockCount * ColdBlobBlockHeaderBytes
@@ -351,6 +365,7 @@ proc decodeBlobRleBlock(
 proc initCompressedBlobMeta*(
     view: ptr SourceIndexView, section: SourceSectionId, enabled: bool
 ): CompressedBlobMeta =
+  ## Parses compressed section header and prepares decode metadata.
   result.enabled = enabled
   result.ringNext = 0
   if not enabled:
@@ -392,6 +407,8 @@ proc findDecodedColdBlobBlock(meta: CompressedBlobMeta, blockIdx: int): int {.in
 proc validateCompressedBlobSection*(
     data: ptr UncheckedArray[byte], size: int, sectionName: string
 ): string =
+  ## Validates compressed blob section structure.
+  ## Returns `""` on success, otherwise an explanatory error string.
   if size < ColdBlobHeaderBytes + PackedWord32Bytes:
     return "compressed section header truncated: " & sectionName
   let rawLen = readU32Bytes(data, 0)
@@ -452,6 +469,7 @@ proc decodeCompressedBlobBlock*(
     decoded: var string,
     rawLen: var int,
 ): bool =
+  ## Decodes one compressed block and caches it in decode ring.
   coldDecodeStats.requests.inc()
   if blockIdx < 0 or blockIdx >= meta.blockCount:
     return false
@@ -518,6 +536,7 @@ proc appendCompressedBlobSlice*(
     buffer: var string,
     maxLen: int,
 ) =
+  ## Appends logical raw slice from compressed blob into caller buffer.
   if rawLen <= 0:
     return
   if rawOffset < 0 or rawOffset >= meta.rawLen:

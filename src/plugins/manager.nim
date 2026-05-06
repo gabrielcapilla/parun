@@ -1,4 +1,9 @@
 ## Bridge between the UI and the background worker thread.
+##
+## Notes:
+## - Owns worker-thread lifecycle and request dispatch wiring.
+## - Validates transaction package names before shell execution.
+## - Routes install/remove to a source-appropriate plugin contract.
 import std/[osproc, strutils]
 import ../core/types
 import worker_types, worker
@@ -102,7 +107,7 @@ proc enqueueSearch(query: string, id: int) {.gcsafe.} =
   reqChan.send(WorkerReq(kind: ReqSearch, query: query, searchId: id))
 
 proc enqueueDetails(
-    idx: int32, name, repo: string, source: DataSource, slot: SourceSlot
+    idx: int32, name, repo, url: string, source: DataSource, slot: SourceSlot
 ) {.gcsafe.} =
   ensureWorkerRunning()
   reqChan.send(
@@ -111,12 +116,14 @@ proc enqueueDetails(
       pkgIdx: idx,
       pkgName: name,
       pkgRepo: repo,
+      pkgUrl: url,
       source: source,
       pkgSlot: slot,
     )
   )
 
 proc requestWorkerDiagnostics*() =
+  ## Enqueues a worker-side memory diagnostics request.
   ensureWorkerRunning()
   reqChan.send(WorkerReq(kind: ReqDiagnostics))
 
@@ -162,11 +169,13 @@ proc pollWorkerMessages*(messages: var seq[Msg]) =
     messages.add(msg)
 
 func buildCmd*(tool: PkgManagerType, op: string, targets: seq[string]): string =
+  ## Builds process command line from plugin contract + operation + targets.
   let def = getToolDef(tool)
   let prefix = if def.sudo: "sudo " else: ""
   result = prefix & def.bin & op & targets.join(" ")
 
 proc runTransaction*(tool: PkgManagerType, targets: seq[string], install: bool): int =
+  ## Executes install/uninstall transaction for selected plugin.
   if targets.len == 0:
     return 0
   let def = getToolDef(tool)

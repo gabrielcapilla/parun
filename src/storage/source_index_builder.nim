@@ -1,7 +1,16 @@
+## Immutable source index builder.
+##
+## Notes:
+## - Converts package records into deterministic sectioned `.prix` artifacts.
+## - Keeps hot fields and cold fields, including repository URLs, separated for
+##   runtime locality.
+## - Opportunistically applies compact encodings (24-bit words, 8-bit repo ids,
+##   compressed cold blobs) when safe.
 import std/[os, streams, strutils, tables, times]
 import source_index_core, source_index_codec
 
 proc initSourceIndexBuilder*(source: IndexedSourceKind): SourceIndexBuilder =
+  ## Initializes empty builder state for one source kind.
   result.source = source
   result.repoMap = initOrderedTable[string, uint16]()
   result.usesWideWords = false
@@ -9,8 +18,17 @@ proc initSourceIndexBuilder*(source: IndexedSourceKind): SourceIndexBuilder =
     result.buckets[i] = @[]
 
 proc addPackageToIndex*(
-    builder: var SourceIndexBuilder, name, version, repo: string, installed: bool
+    builder: var SourceIndexBuilder,
+    name, version, repo: string,
+    installed: bool,
+    url: string = "",
 ) =
+  ## Adds one package record to builder buffers.
+  ##
+  ## `url` is optional for sources whose detail backend does not need upstream
+  ## metadata. Nimble indexes pass the package repository URL here so later
+  ## detail lookup can resolve the remote `.nimble` manifest directly from the
+  ## mapped `.prix` data.
   if name.len == 0:
     return
 
@@ -18,6 +36,8 @@ proc addPackageToIndex*(
     raise newException(ValueError, "package name too long for index: " & name)
   if version.len > high(uint16).int:
     raise newException(ValueError, "package version too long for index: " & name)
+  if url.len > high(uint16).int:
+    raise newException(ValueError, "package url too long for index: " & name)
 
   builder.nameOffsets.addLe32(checkedU32(builder.nameBlob.len, "name blob offset"))
   builder.nameLens.addLe16(checkedU16(name.len, "name length"))
@@ -26,6 +46,10 @@ proc addPackageToIndex*(
   builder.verOffsets.addLe32(checkedU32(builder.verBlob.len, "version blob offset"))
   builder.verLens.addLe16(checkedU16(version.len, "version length"))
   builder.verBlob.add(version)
+
+  builder.urlOffsets.addLe32(checkedU32(builder.urlBlob.len, "url blob offset"))
+  builder.urlLens.addLe16(checkedU16(url.len, "url length"))
+  builder.urlBlob.add(url)
 
   var repoIdx: uint16
   if builder.repoMap.hasKey(repo):
@@ -46,13 +70,15 @@ proc addPackageToIndex*(
     builder.usesWideWords = true
   if builder.nameBlob.len > PackedWord24Limit.int or
       builder.verBlob.len > PackedWord24Limit.int or
-      builder.repoBlob.len > PackedWord24Limit.int:
+      builder.repoBlob.len > PackedWord24Limit.int or
+      builder.urlBlob.len > PackedWord24Limit.int:
     builder.usesWideWords = true
   builder.emittedCount.inc()
 
 proc finishSourceIndex*(
     builder: var SourceIndexBuilder, outPath: string
 ): SourceIndexStats =
+  ## Finalizes and writes `.prix` file atomically.
   var bucketOffsets, bucketLens, bucketIds: string
   var runningOffset = 0
   for bucketIdx in 0 ..< BucketCount:
@@ -67,7 +93,8 @@ proc finishSourceIndex*(
     (not canPackWords24(builder.lowerOffsets)) or
     (not canPackWords24(builder.verOffsets)) or (
       not canPackWords24(builder.repoOffsets)
-    ) or (not canPackWords24(bucketOffsets)) or (not canPackWords24(bucketLens)) or
+    ) or (not canPackWords24(builder.urlOffsets)) or
+    (not canPackWords24(bucketOffsets)) or (not canPackWords24(bucketLens)) or
     (not canPackWords24(bucketIds))
 
   let nameOffsetsData =
@@ -90,6 +117,11 @@ proc finishSourceIndex*(
       builder.repoOffsets
     else:
       packWords24(builder.repoOffsets)
+  let urlOffsetsData =
+    if useWideWords:
+      builder.urlOffsets
+    else:
+      packWords24(builder.urlOffsets)
   let bucketOffsetsData =
     if useWideWords:
       bucketOffsets
@@ -136,6 +168,9 @@ proc finishSourceIndex*(
       SectionPayload(name: SectionNames[ssRepoOffsets], data: repoOffsetsData),
       SectionPayload(name: SectionNames[ssRepoLens], data: builder.repoLens),
       SectionPayload(name: SectionNames[ssRepoBlob], data: repoBlobData),
+      SectionPayload(name: SectionNames[ssUrlOffsets], data: urlOffsetsData),
+      SectionPayload(name: SectionNames[ssUrlLens], data: builder.urlLens),
+      SectionPayload(name: SectionNames[ssUrlBlob], data: builder.urlBlob),
       SectionPayload(name: SectionNames[ssBucketOffsets], data: bucketOffsetsData),
       SectionPayload(name: SectionNames[ssBucketLens], data: bucketLensData),
       SectionPayload(name: SectionNames[ssBucketIds], data: bucketIdsData),
@@ -209,6 +244,10 @@ proc buildSourceIndex*(
     packages: openArray[IndexedPackageRecord],
     outPath: string,
 ): SourceIndexStats =
+  ## Convenience helper: build index from an in-memory package slice.
+  ## This helper preserves name/version/repository/installed state. Call
+  ## `addPackageToIndex` directly when constructing indexes that must persist
+  ## per-package URLs.
   var builder = initSourceIndexBuilder(source)
   for pkg in packages:
     builder.addPackageToIndex(pkg.name, pkg.version, pkg.repo, pkg.installed)

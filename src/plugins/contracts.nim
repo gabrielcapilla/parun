@@ -1,3 +1,8 @@
+## Plugin contract registry.
+##
+## Notes:
+## - Defines a static capability model used by manager/worker orchestration.
+## - Compile-time assertions at bottom guarantee contract integrity.
 import ../core/types
 import std/strutils
 
@@ -65,6 +70,7 @@ const PluginContracts* = [
 ]
 
 func getPluginContract*(id: PluginId): lent PluginContract {.inline.} =
+  ## Returns immutable contract definition for plugin id.
   PluginContracts[id]
 
 func supports*(plugin: PluginContract, capability: PluginCapability): bool {.inline.} =
@@ -102,6 +108,7 @@ proc capabilitySetLabel*(caps: set[PluginCapability]): string =
 proc enforceCapabilities*(
     plugin: PluginContract, required: set[PluginCapability], context: string
 ) =
+  ## Runtime guard that fails fast when a call path requires unsupported features.
   let missing = plugin.missingCapabilities(required)
   if missing.len > 0:
     raise newException(

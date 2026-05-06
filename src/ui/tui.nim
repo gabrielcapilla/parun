@@ -1,6 +1,11 @@
 ## Main UI orchestration.
+##
+## Notes:
+## - Produces complete frame buffer and cursor coordinates per tick.
+## - Delegates row/details/status rendering to `ui/renderer`.
+## - Keeps all terminal escape sequencing centralized in one pass.
 
-import std/[strformat]
+import std/[sets, strformat]
 import ../core/[types, state]
 import ../storage/indexes
 import renderer
@@ -128,7 +133,7 @@ proc renderUi*(
         realIdx,
         listW,
         rowIdx == state.cursor,
-        isSelected(state.selectionBits, int(realIdx)),
+        state.isSelectedPackage(view, int(realIdx)),
       )
     else:
       buffer.appendSpaces(listW)
@@ -145,7 +150,7 @@ proc renderUi*(
     buffer,
     state.visibleCount(),
     packageCount(view),
-    state.selectionBits,
+    len(state.selectedPackages),
     state.viewingSelection,
     state.dataSource,
     state.searchMode,

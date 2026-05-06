@@ -1,7 +1,17 @@
-import std/[httpclient, strutils]
+## Worker-side details resolution pipeline.
+##
+## Notes:
+## - Coalesces pending `ReqDetails` bursts to keep only the latest request.
+## - Checks packed cache first, then resolves from source-specific backends.
+## - Nimble requests prefer the repository URL carried in the mapped `.prix`
+##   record; old indexes without that URL fall back to the Nimble metadata cache.
+## - All outgoing payloads are clamped to UI budget before send.
+import std/[httpclient, os]
 import ../core/types
-import worker_types, worker_cache, worker_exec
+import worker_types, worker_cache, worker_exec, cache
 import nimble
+
+const NimbleDetailFormatVersion = "nimble-manifest-v4"
 
 proc sendDetailsLoaded(
     resChan: var Channel[Msg], req: WorkerReq, content: string
@@ -13,56 +23,74 @@ proc sendDetailsLoaded(
   )
 
 proc buildDetailCacheKey(req: WorkerReq): string {.inline.} =
-  result = newStringOfCap(req.pkgRepo.len + req.pkgName.len + 16)
+  let versionLen =
+    if req.source == SourceNimble:
+      NimbleDetailFormatVersion.len + 1
+    else:
+      0
+  result = newStringOfCap(req.pkgRepo.len + req.pkgName.len + req.pkgUrl.len + versionLen + 17)
+  if req.source == SourceNimble:
+    result.add(NimbleDetailFormatVersion)
+    result.add(':')
   result.add($req.pkgSlot)
   result.add(':')
   result.add(req.pkgRepo)
   result.add(':')
   result.add(req.pkgName)
+  result.add(':')
+  result.add(req.pkgUrl)
+
+proc ensureNimbleMetaLoaded(cacheRef: var PackedNimbleMetaCache): bool =
+  ## Loads legacy Nimble package metadata for indexes that do not carry URLs.
+  ## Current v6 `nimble.prix` files normally bypass this path.
+  if cacheRef.entries.len > 0 and cacheRef.slots.len > 0:
+    return true
+
+  var nimbleCache = initNimbleCache()
+  if not safeLoadOrRefreshCache(nimbleCache, keepJson = true):
+    return false
+
+  let jsonPath = getCachePath() / nimbleCache.jsonPath
+  if not fileExists(jsonPath):
+    discard ensureJsonAvailable(nimbleCache)
+  if not fileExists(jsonPath):
+    return false
+
+  let loaded = loadPackedNimbleMeta(jsonPath)
+  if loaded.entries.len == 0 or loaded.slots.len == 0:
+    return false
+
+  cacheRef = loaded
+  true
 
 proc tryFetchNimbleDetail(
     req: WorkerReq,
-    nimbleMetaCache: PackedNimbleMetaCache,
+    nimbleMetaCache: var PackedNimbleMetaCache,
     client: HttpClient,
     content: var string,
 ): bool =
-  var metaUrl = ""
+  ## Fetches and formats Nimble details from the package repository manifest.
+  ## Returns false when neither an indexed URL nor legacy metadata can provide a
+  ## usable repository URL, or when all candidate raw `.nimble` URLs fail.
+  var metaUrl = req.pkgUrl
   var metaTagsLine = ""
-  if not getNimbleMeta(nimbleMetaCache, req.pkgName, metaUrl, metaTagsLine):
-    return false
+  if metaUrl.len == 0:
+    if not ensureNimbleMetaLoaded(nimbleMetaCache):
+      return false
+    if not getNimbleMeta(nimbleMetaCache, req.pkgName, metaUrl, metaTagsLine):
+      return false
 
-  let rawBase = getRawBaseUrl(metaUrl)
-  if rawBase.len == 0:
-    return false
-
-  let lowerName = req.pkgName.toLowerAscii()
-  for branch in ["master", "main"]:
+  for candidateUrl in getRawNimbleFileCandidates(metaUrl, req.pkgName):
     try:
       content = parseNimbleInfo(
-        downloadWithRetry(
-          client, rawBase & "/" & branch & "/" & req.pkgName & ".nimble", maxRetries = 2
-        ),
+        downloadWithRetry(client, candidateUrl, maxRetries = 2),
         req.pkgName,
         metaUrl,
         metaTagsLine,
       )
       return true
     except CatchableError:
-      if req.pkgName != lowerName:
-        try:
-          content = parseNimbleInfo(
-            downloadWithRetry(
-              client,
-              rawBase & "/" & branch & "/" & lowerName & ".nimble",
-              maxRetries = 2,
-            ),
-            req.pkgName,
-            metaUrl,
-            metaTagsLine,
-          )
-          return true
-        except CatchableError:
-          discard
+      discard
   false
 
 proc processDetailRequests*(
@@ -73,10 +101,11 @@ proc processDetailRequests*(
     hasReq: var bool,
     detailBatch: var seq[WorkerReq],
     detailsCache: var PackedDetailCache,
-    nimbleMetaCache: PackedNimbleMetaCache,
+    nimbleMetaCache: var PackedNimbleMetaCache,
     toolDef: ToolDef,
     client: HttpClient,
 ) =
+  ## Handles one detail request batch starting from `firstReq`.
   detailBatch.setLen(0)
   detailBatch.add(firstReq)
 

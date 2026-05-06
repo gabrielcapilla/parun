@@ -1,3 +1,9 @@
+## Packed worker-side caches for details, Nimble metadata, and installed map.
+##
+## Notes:
+## - All caches are arena-backed with compact metadata records.
+## - Lookup paths are allocation-aware and favor open-addressed hash probes.
+## - The goal is bounded RSS during long interactive sessions.
 import std/[hashes, os, parsejson, streams, strutils]
 
 const
@@ -92,6 +98,7 @@ proc clearDetailsCache(cache: var PackedDetailCache) =
     cache.entries[i].valid = false
 
 proc initDetailsCache*(): PackedDetailCache =
+  ## Creates an empty fixed-slot details cache.
   PackedDetailCache(arena: @[], arenaUsed: 0, count: 0, nextEvict: 0)
 
 proc findDetailsCacheSlot(cache: PackedDetailCache, key: string, h: uint32): int =
@@ -105,6 +112,7 @@ proc findDetailsCacheSlot(cache: PackedDetailCache, key: string, h: uint32): int
   -1
 
 proc getDetailsCache*(cache: PackedDetailCache, key: string, value: var string): bool =
+  ## Retrieves details payload for `key`; returns false on miss.
   let h = hash32(key)
   let slot = findDetailsCacheSlot(cache, key, h)
   if slot < 0:
@@ -114,6 +122,7 @@ proc getDetailsCache*(cache: PackedDetailCache, key: string, value: var string):
   true
 
 proc putDetailsCache*(cache: var PackedDetailCache, key: string, value: string) =
+  ## Inserts/replaces details payload with bounded arena + ring eviction.
   if key.len > high(uint16).int:
     return
 
@@ -155,6 +164,7 @@ proc putDetailsCache*(cache: var PackedDetailCache, key: string, value: string) 
   )
 
 proc detailsCacheBytes*(cache: PackedDetailCache): int {.inline.} =
+  ## Estimated bytes owned by details cache.
   cache.arena.len + WorkerDetailsCacheLimit * sizeof(PackedDetailEntry)
 
 proc nextPow2AtLeast(value: int): int =
@@ -232,6 +242,7 @@ proc putNimbleMeta(cache: var PackedNimbleMetaCache, name, url, tagsLine: string
 proc getNimbleMeta*(
     cache: PackedNimbleMetaCache, name: string, url: var string, tagsLine: var string
 ): bool =
+  ## Lookup packed nimble metadata by package name.
   if cache.slots.len == 0:
     return false
   let h = hash32(name)
@@ -254,10 +265,13 @@ proc getNimbleMeta*(
   false
 
 proc nimbleMetaCacheBytes*(cache: PackedNimbleMetaCache): int {.inline.} =
+  ## Estimated bytes owned by nimble metadata cache.
   cache.arena.len + capacity(cache.slots) * sizeof(int32) +
     capacity(cache.entries) * sizeof(PackedNimbleMetaEntry)
 
 proc loadPackedNimbleMeta*(jsonPath: string): PackedNimbleMetaCache =
+  ## Loads `packages.json` into packed hash+arena form for legacy Nimble detail
+  ## lookup when a mapped index does not carry repository URLs.
   if not fileExists(jsonPath):
     return initPackedNimbleMetaCache()
   var estimated = 4096
@@ -389,6 +403,7 @@ proc putInstalledMap(cache: var PackedInstalledMap, name: openArray[char]) =
   cache.slots[slot] = int32(idx)
 
 proc containsInstalledMap*(cache: PackedInstalledMap, name: openArray[char]): bool =
+  ## Allocation-free membership check for installed package name slices.
   if name.len == 0 or cache.slots.len == 0:
     return false
   let h = hashChars(name)
@@ -408,15 +423,18 @@ proc containsInstalledMap*(cache: PackedInstalledMap, name: openArray[char]): bo
   false
 
 proc containsInstalledMap*(cache: PackedInstalledMap, name: string): bool {.inline.} =
+  ## Convenience string overload for installed map lookup.
   if name.len == 0:
     return false
   containsInstalledMap(cache, name.toOpenArray(0, name.high))
 
 proc installedMapBytes*(cache: PackedInstalledMap): int {.inline.} =
+  ## Estimated bytes owned by packed installed map.
   cache.arena.len + capacity(cache.slots) * sizeof(int32) +
     capacity(cache.entries) * sizeof(PackedInstalledEntry)
 
 proc parseInstalledPackagesPacked*(output: string): PackedInstalledMap =
+  ## Parses `pacman -Q` output into packed installed package map.
   let estimated = max(256, output.count('\n'))
   result = initPackedInstalledMap(estimated)
   for line in output.split('\n'):

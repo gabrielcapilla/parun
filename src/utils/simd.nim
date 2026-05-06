@@ -3,6 +3,11 @@
 ## Supported backends:
 ## - SSE2 (x86/x64): 16 characters per cycle.
 ## - Scalar: Fallback for other architectures (ARM, etc.).
+##
+## Notes:
+## - This module is hot-path search scoring, not generic text processing.
+## - `scorePackageSimd` combines exact-token and fuzzy-token scores.
+## - `ResultsBuffer` is fixed-size to avoid allocations during filtering.
 
 import std/[bitops, strutils]
 
@@ -105,6 +110,7 @@ type ResultsBuffer* = object
   count*: int32
 
 func prepareSearchContext*(query: string): SearchContext =
+  ## Tokenizes and normalizes query once per filter operation.
   let clean = query.strip()
   if clean.len == 0:
     return SearchContext(isValid: false)
@@ -211,6 +217,7 @@ func scoreTokenFuzzy(startPtr: ptr char, len: int, pattern: string): int =
   return max(1, score)
 
 func scorePackageSimd*(textPtr: ptr char, len: int, ctx: SearchContext): int =
+  ## Scores a package name against prepared query context.
   if not ctx.isValid or len == 0:
     return 0
   var totalScore = 0
@@ -227,6 +234,7 @@ func scorePackageSimd*(textPtr: ptr char, len: int, ctx: SearchContext): int =
   return min(totalScore, 999)
 
 proc countingSortResults*(buf: var ResultsBuffer) =
+  ## Stable descending score sort over fixed score range [0, 999].
   if buf.count == 0:
     return
   const MaxScore = 1000

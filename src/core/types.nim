@@ -6,7 +6,7 @@
 ##    from rarely accessed data (details/rendering).
 ## 3. **Arenas:** Using contiguous buffers for strings to avoid fragmentation and GC.
 
-import std/[monotimes, strutils]
+import std/[monotimes, sets, strutils]
 import ../utils/memory_accounting
 import ../storage/indexes
 
@@ -32,6 +32,7 @@ const
   KeyBackspace* = char(8)
   KeyTab* = char(9)
   KeyCtrlJ* = char(10)
+  KeyCtrlK* = char(11)
   KeyEnter* = char(13)
   KeyCtrlN* = char(14)
   KeyCtrlR* = char(18)
@@ -96,6 +97,16 @@ type
     SlotNimble
     SlotMerged
 
+  DetailAnimationStyle* = enum
+    DetailAnimationBlocks
+    DetailAnimationFade
+
+  DetailAnimationSpeed* = enum
+    DetailAnimationFast
+    DetailAnimationNormal
+    DetailAnimationSlow
+    DetailAnimationUltraSlow
+
   MsgKind* = enum
     ## Message types for the Actor system (Threading).
     MsgInput
@@ -138,8 +149,11 @@ type
 
   RequestLoadProc* = proc(id: int) {.gcsafe.}
   RequestSearchProc* = proc(query: string, id: int) {.gcsafe.}
+  ## Requests detail text for one visible package identity.
+  ## `url` is optional for pacman/AUR and carries the Nimble repository URL when
+  ## present in the mapped source index.
   RequestDetailsProc* = proc(
-    idx: int32, name, repo: string, source: DataSource, slot: SourceSlot
+    idx: int32, name, repo, url: string, source: DataSource, slot: SourceSlot
   ) {.gcsafe.}
 
 var
@@ -178,10 +192,10 @@ proc requestSearch*(query: string, id: int) {.inline.} =
     requestSearchImpl(query, id)
 
 proc requestDetails*(
-    idx: int32, name, repo: string, source: DataSource, slot: SourceSlot
+    idx: int32, name, repo, url: string, source: DataSource, slot: SourceSlot
 ) {.inline.} =
   if requestDetailsImpl != nil:
-    requestDetailsImpl(idx, name, repo, source, slot)
+    requestDetailsImpl(idx, name, repo, url, source, slot)
 
 type
   StringArenaHandle* = object
@@ -274,6 +288,13 @@ type
     count*: int
     nextEvict*: int
 
+  DetailScramble* = object ## Render-only reveal state for freshly loaded details.
+    pkgIdx*: int32
+    pkgSlot*: SourceSlot
+    startedAt*: MonoTime
+    durationMs*: int
+    active*: bool
+
   PerfCounters* = object ## Hot-path counters (search/filtering).
     hotFilterCalls*: uint64
     hotFilterCandidates*: uint64
@@ -322,6 +343,8 @@ type
     visibleAllCount*: int32
     ## Bitset for multi-selection (64 pkgs per int).
     selectionBits*: seq[uint64]
+    ## Source-independent selected package keys (`repo/name`).
+    selectedPackages*: HashSet[string]
     ## Bounded details cache with fixed metadata and arena-backed payload.
     detailsCache*: DetailCache
 
@@ -358,6 +381,7 @@ type
     # Modes
     lastDetailIdx*: int32
     pendingDetailIdx*: int32
+    detailScramble*: DetailScramble
     searchMode*: SearchMode
     dataSource*: DataSource
     ## Mode to return to after exiting AUR/Nimble.
@@ -372,6 +396,8 @@ type
     ## Runtime directory where immutable indexes are stored.
     runtimeIndexDir*: string
     activeSlot*: SourceSlot
+    sourceIndexStamps*: array[SourceSlot, int64]
+    lastIndexPollTime*: MonoTime
     pendingDetailSlot*: SourceSlot
     detailRequestInFlight*: bool
     ## Runtime perf counters used by automated harness assertions.
@@ -381,12 +407,16 @@ type
     ## Filter: View only selected?
     viewingSelection*: bool
     isSearching*: bool
+    indexRefreshInFlight*: bool
     ## Dirty flag for rendering.
     needsRedraw*: bool
     shouldQuit*: bool
     shouldInstall*: bool
     shouldUninstall*: bool
     showDetails*: bool
+    detailsAnimationEnabled*: bool
+    detailAnimationStyle*: DetailAnimationStyle
+    detailAnimationSpeed*: DetailAnimationSpeed
     justReceivedSearchResults*: bool
     debouncePending*: bool
 

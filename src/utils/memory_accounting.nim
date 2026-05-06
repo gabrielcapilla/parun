@@ -1,3 +1,8 @@
+## Generic memory-accounting helpers used by worker diagnostics.
+##
+## Notes:
+## - `nestedBytes` estimates owned heap capacity, not serialized payload size.
+## - Table sizing uses a mirror type to inspect internal seq capacity.
 import std/[hashes, tables]
 
 type
@@ -23,6 +28,7 @@ type
 proc metric*(
     name: string, bytes: int, length: int = 0, capacity: int = 0, note: string = ""
 ): MemoryMetric {.inline.} =
+  ## Constructs one metric row.
   MemoryMetric(name: name, bytes: bytes, length: length, capacity: capacity, note: note)
 
 proc addMetric*(
@@ -85,9 +91,11 @@ proc addScalarMetric*(
   section.addMetric(name, bytes, note = note)
 
 proc sectionBytes*(section: MemorySection): int =
+  ## Aggregates bytes for one section.
   for item in section.metrics:
     result += item.bytes
 
 proc reportBytes*(report: WorkerMemoryReport): int =
+  ## Aggregates bytes across all sections.
   for section in report.sections:
     result += section.sectionBytes()
