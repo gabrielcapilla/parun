@@ -71,9 +71,11 @@ supports_x86_64_v3() {
 	[[ -r /proc/cpuinfo ]] || return 1
 
 	local flag
-	for flag in avx avx2 bmi1 bmi2 f16c fma lzcnt movbe osxsave xsave; do
+	for flag in avx avx2 bmi1 bmi2 f16c fma movbe xsave; do
 		cpu_has_flag "${flag}" || return 1
 	done
+
+	cpu_has_flag lzcnt || cpu_has_flag abm || return 1
 }
 
 select_asset() {
