@@ -1,203 +1,168 @@
 #!/usr/bin/env bash
 
-# Strict mode for error handling
-set -o errexit -o nounset -o pipefail
+set -euo pipefail
 
-# Colors RGB & End
-declare -r R="\033[1;31m"
-declare -r G="\033[1;32m"
-declare -r Y="\033[1;33m"
-declare -r E="\033[0m"
+readonly REPO="gabrielcapilla/parun"
+readonly BINARY_NAME="parun"
+readonly INSTALL_DIR="${HOME}/.local/bin"
+readonly REQUIRED_SPACE_MB=10
+readonly MAX_DOWNLOAD_TIME=300
+readonly MAX_FILE_SIZE_MB=8
 
-# Color codes
-declare -r A="${Y}::${E}" # Action
-declare -r S="${G}::${E}" # Success
-declare -r F="${R}::${E}" # Error/Fail
+readonly RED=$'\033[1;31m'
+readonly GREEN=$'\033[1;32m'
+readonly YELLOW=$'\033[1;33m'
+readonly RESET=$'\033[0m'
+readonly ACTION="${YELLOW}::${RESET}"
+readonly SUCCESS="${GREEN}::${RESET}"
+readonly FAILURE="${RED}::${RESET}"
 
-# Paths & Config
-declare -r REPO="gabrielcapilla/parun"
-declare -r BINARY_NAME="parun"
-declare -r INSTALL_DIR="${HOME}/.local/bin"
-declare -r API_URL="https://api.github.com/repos/${REPO}/releases/latest"
-declare -r REQUIRED_SPACE_MB=10
-declare -r MAX_DOWNLOAD_TIME=300
-declare -r MAX_FILE_SIZE_MB=5
+TEMP_FILE=""
 
-# Global state
-declare -g TEMP_FILE=""
-
-# Log error message and exit with a non-zero status
-function log_error() {
-  cleanup
-  printf >&2 "${F} %s\n" "$*"
-  exit 1
+cleanup() {
+	if [[ -n "${TEMP_FILE}" && -f "${TEMP_FILE}" ]]; then
+		rm -f -- "${TEMP_FILE}"
+	fi
 }
 
-# Cleanup temporary files on exit
-function cleanup() {
-  if [[ -n "${TEMP_FILE}" && -f "${TEMP_FILE}" ]]; then
-    rm -f -- "${TEMP_FILE}"
-  fi
+fail() {
+	printf >&2 "%b %s\n" "${FAILURE}" "$*"
+	exit 1
 }
 
-# Check if required dependencies are installed
-function check_dependencies() {
-  command -v curl &>/dev/null || log_error "curl is not installed"
-  command -v file &>/dev/null || log_error "file is not installed"
-  command -v sha256sum &>/dev/null || log_error "sha256sum is not installed"
-  command -v xxd &>/dev/null || log_error "xxd is not installed (package: vim or xxd)"
-  command -v readelf &>/dev/null || log_error "readelf is not installed (package: binutils)"
+require_cmd() {
+	command -v "$1" >/dev/null 2>&1 || fail "$1 is required"
 }
 
-# Check available disk space
-function check_disk_space() {
-  local available_space_mb
-  available_space_mb=$(df -m "${HOME}" | awk 'NR==2 {print $4}')
-
-  if [[ "${available_space_mb}" -lt "${REQUIRED_SPACE_MB}" ]]; then
-    log_error "Insufficient disk space. Required: ${REQUIRED_SPACE_MB}MB, Available: ${available_space_mb}MB"
-  fi
+check_dependencies() {
+	require_cmd curl
+	require_cmd df
+	require_cmd file
+	require_cmd readelf
 }
 
-# Verify INSTALL_DIR is in PATH
-function check_path() {
-  if [[ ! ":${PATH}:" == *":${INSTALL_DIR}:"* ]]; then
-    printf >&2 "%b Warning: %s is not in your PATH\n" "${Y}" "${INSTALL_DIR}"
-    printf >&2 "%b Add the following to your shell profile:\n" "${Y}"
-    printf >&2 "%b   export PATH=\"%s:\$PATH\"\n" "${Y}" "${INSTALL_DIR}"
-  fi
+check_disk_space() {
+	local available_space_mb
+	available_space_mb=$(df -Pm "${HOME}" | awk 'NR == 2 { print $4 }')
+	[[ "${available_space_mb}" =~ ^[0-9]+$ ]] || fail "could not read available disk space"
+
+	if ((available_space_mb < REQUIRED_SPACE_MB)); then
+		fail "insufficient disk space: need ${REQUIRED_SPACE_MB}MB, have ${available_space_mb}MB"
+	fi
 }
 
-# Check if binary is already installed and ask for update confirmation
-function check_existing_installation() {
-  local binary_path="${INSTALL_DIR}/${BINARY_NAME}"
-
-  if [[ -f "${binary_path}" ]]; then
-    printf >&2 "%b %s is already installed at %s\n" "${A}" "${BINARY_NAME}" "${binary_path}"
-    printf >&2 "%b Do you want to update it? [y/N]: " "${A}"
-
-    local response
-    read -r response </dev/tty
-
-    if [[ "${response}" != "y" && "${response}" != "Y" ]]; then
-      printf >&2 "%b Installation cancelled\n" "${S}"
-      exit 0
-    fi
-  fi
+cpu_has_flag() {
+	local flag="$1"
+	awk -v flag="${flag}" '
+    /^flags[[:space:]]*:/ {
+      for (i = 3; i <= NF; i++) {
+        if ($i == flag) {
+          found = 1
+          exit
+        }
+      }
+    }
+    END { exit found ? 0 : 1 }
+  ' /proc/cpuinfo
 }
 
-# Get download URL from GitHub API
-function get_download_url() {
-  local download_url
-  download_url=$(curl -s --fail "${API_URL}" | grep "browser_download_url.*${BINARY_NAME}" | cut -d '"' -f 4)
+supports_x86_64_v3() {
+	[[ "$(uname -m)" == "x86_64" ]] || return 1
+	[[ -r /proc/cpuinfo ]] || return 1
 
-  [[ -n "${download_url}" ]] || log_error "Could not find download URL for ${BINARY_NAME}"
-
-  echo "${download_url}"
+	local flag
+	for flag in avx avx2 bmi1 bmi2 f16c fma lzcnt movbe osxsave xsave; do
+		cpu_has_flag "${flag}" || return 1
+	done
 }
 
-# Validate that downloaded file is a valid ELF executable
-function validate_binary() {
-  local file="$1"
+select_asset() {
+	[[ "$(uname -m)" == "x86_64" ]] || fail "unsupported architecture: $(uname -m)"
 
-  # Check file exists and is not empty
-  if [[ ! -s "${file}" ]]; then
-    log_error "Downloaded file is empty"
-  fi
-
-  # Check ELF magic bytes
-  local magic
-  magic=$(xxd -l 4 "${file}" 2>/dev/null | head -1)
-  if [[ ! "$magic" =~ "7f454c46" ]]; then
-    log_error "Invalid file: does not have ELF magic bytes"
-  fi
-
-  # Check it's a 64-bit executable
-  if ! file "${file}" | grep -q "ELF 64-bit"; then
-    log_error "Invalid ELF file: not a 64-bit executable"
-  fi
-
-  # Check it's an executable (not a shared library or relocatable)
-  if ! file "${file}" | grep -q "executable"; then
-    log_error "Invalid ELF file: not an executable"
-  fi
-
-  # Check it's not a text file disguised as binary
-  if file "${file}" | grep -qi "text\|ascii"; then
-    log_error "Invalid file: appears to be a text file"
-  fi
-
-  # Verify ELF header integrity with readelf
-  if ! readelf -h "${file}" &>/dev/null; then
-    log_error "Invalid ELF file: corrupted header"
-  fi
-
-  # Check for required sections
-  if ! readelf -S "${file}" &>/dev/null; then
-    log_error "Invalid ELF file: no section headers"
-  fi
+	if supports_x86_64_v3; then
+		printf 'parun-linux-x86_64-v3\n'
+	else
+		printf 'parun-linux-x86_64\n'
+	fi
 }
 
-# Download binary to temporary file
-function download_binary() {
-  local url="$1"
-
-  printf >&2 "%b Downloading %s...\n" "${A}" "${BINARY_NAME}"
-
-  TEMP_FILE=$(mktemp)
-
-  curl -sL --fail \
-    --max-time "${MAX_DOWNLOAD_TIME}" \
-    --max-filesize "$((MAX_FILE_SIZE_MB * 1024 * 1024))" \
-    "${url}" \
-    -o "${TEMP_FILE}" || log_error "Download failed"
-
-  [[ -f "${TEMP_FILE}" ]] || log_error "Download failed: file not created"
-
-  validate_binary "${TEMP_FILE}"
+release_url_for() {
+	local asset="$1"
+	printf 'https://github.com/%s/releases/latest/download/%s\n' "${REPO}" "${asset}"
 }
 
-# Install binary to target directory
-function install_binary() {
-  local binary_path="${INSTALL_DIR}/${BINARY_NAME}"
-
-  printf >&2 "%b Installing %s to %s...\n" "${A}" "${BINARY_NAME}" "${INSTALL_DIR}"
-
-  mkdir -p -- "${INSTALL_DIR}"
-  mv -- "${TEMP_FILE}" "${binary_path}"
-  chmod +x -- "${binary_path}"
-
-  TEMP_FILE="" # Clear temp file reference after successful move
+check_path() {
+	if [[ ":${PATH}:" != *":${INSTALL_DIR}:"* ]]; then
+		printf >&2 "%b warning: %s is not in PATH\n" "${ACTION}" "${INSTALL_DIR}"
+		printf >&2 "%b add this to your shell profile:\n" "${ACTION}"
+		printf >&2 "  export PATH=\"%s:\$PATH\"\n" "${INSTALL_DIR}"
+	fi
 }
 
-# Verify installation
-function verify_installation() {
-  local binary_path="${INSTALL_DIR}/${BINARY_NAME}"
+confirm_existing_installation() {
+	local binary_path="${INSTALL_DIR}/${BINARY_NAME}"
+	[[ -e "${binary_path}" ]] || return 0
 
-  if [[ ! -x "${binary_path}" ]]; then
-    printf >&2 "%s Installation verification failed\n" "${F}"
-    log_error "Could not verify installation"
-  fi
+	if [[ ! -t 0 ]]; then
+		printf >&2 "%b replacing existing %s\n" "${ACTION}" "${binary_path}"
+		return 0
+	fi
 
-  printf "%b Successfully installed %s to %s/\n" "${S}" "${BINARY_NAME}" "${INSTALL_DIR}"
+	local response
+	printf >&2 "%b %s already exists. Update it? [y/N]: " "${ACTION}" "${binary_path}"
+	read -r response
+	[[ "${response}" == "y" || "${response}" == "Y" ]] || exit 0
 }
 
-# Main function orchestrating the script flow
-function main() {
-  trap cleanup EXIT
+validate_binary() {
+	local file_path="$1"
 
-  check_dependencies
-  check_disk_space
-  check_path
-  check_existing_installation
-
-  local download_url
-  download_url=$(get_download_url)
-
-  download_binary "${download_url}"
-  install_binary
-  verify_installation
+	[[ -s "${file_path}" ]] || fail "downloaded file is empty"
+	file "${file_path}" | grep -q 'ELF 64-bit' || fail "downloaded file is not a 64-bit ELF binary"
+	file "${file_path}" | grep -q 'executable' || fail "downloaded ELF is not executable"
+	readelf -h "${file_path}" >/dev/null || fail "downloaded ELF header is invalid"
 }
 
-# Execute the main function
+download_binary() {
+	local asset="$1"
+	local url="$2"
+
+	TEMP_FILE=$(mktemp "${TMPDIR:-/tmp}/parun.XXXXXX")
+	printf >&2 "%b downloading %s\n" "${ACTION}" "${asset}"
+
+	curl --fail --location --silent --show-error \
+		--max-time "${MAX_DOWNLOAD_TIME}" \
+		--max-filesize "$((MAX_FILE_SIZE_MB * 1024 * 1024))" \
+		--output "${TEMP_FILE}" \
+		"${url}" || fail "download failed: ${url}"
+
+	validate_binary "${TEMP_FILE}"
+}
+
+install_binary() {
+	local binary_path="${INSTALL_DIR}/${BINARY_NAME}"
+
+	mkdir -p -- "${INSTALL_DIR}"
+	install -m 0755 "${TEMP_FILE}" "${binary_path}"
+	TEMP_FILE=""
+
+	[[ -x "${binary_path}" ]] || fail "installation verification failed"
+	printf "%b installed %s\n" "${SUCCESS}" "${binary_path}"
+}
+
+main() {
+	trap cleanup EXIT
+
+	check_dependencies
+	check_disk_space
+	check_path
+	confirm_existing_installation
+
+	local asset
+	asset=$(select_asset)
+
+	download_binary "${asset}" "$(release_url_for "${asset}")"
+	install_binary
+}
+
 main "$@"
