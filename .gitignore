@@ -21,6 +21,7 @@ parun
 
 # Folders
 bin/
+benchmarks/
 docs/
 dist/
 tools/
