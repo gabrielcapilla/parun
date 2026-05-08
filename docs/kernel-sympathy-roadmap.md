@@ -65,10 +65,32 @@ Result:
 - Added tests for pacman/nimble transaction argv construction and shell
   metacharacter rejection.
 
+## Step 4: Pacman Local DB Scan Tightening
+
+Target: `src/plugins/pacman.nim`.
+
+Status: implemented.
+
+Result:
+
+- Added `benchmarks/bench_pacman_local_db.nim` to separate directory iteration,
+  `desc` discovery, direct local DB parsing, and `pacman -Q` process cost.
+- `getdents64` gate did not pass: directory iteration averaged about 4.9 ms
+  while full local DB parsing averaged about 19.9 ms on this machine, so
+  replacing `walkDir` would not attack the dominant cost.
+- Removed one avoidable `stat` per installed package by opening `desc`
+  directly and relying on the existing unreadable-entry fallback path.
+- Removed per-line `strip()` allocation from pacman `desc` parsing. Pacman
+  local DB fields are line-oriented; malformed/unreadable entries are still
+  skipped.
+- Post-change repeated parse averages: 18.266 ms, 17.525 ms, 17.889 ms over
+  40 iterations. Best observed gain against the initial run: 2.388 ms,
+  about 12.0%.
+
 ## Deferred
 
-- `getdents64`: only after direct pacman DB parsing shows directory iteration
-  is still hot.
+- `getdents64`: rejected for now. Local benchmark showed directory iteration is
+  a minority of installed-state parse time after direct pacman DB parsing.
 - `io_uring`: defer; mmap plus `madvise` is lower risk and fits current design.
 - `eventfd`: defer until channel wakeups are measured as a bottleneck.
 - `memfd_create`: defer; parun benefits from durable metadata/index caches.

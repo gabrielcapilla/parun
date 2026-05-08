@@ -30,9 +30,10 @@ proc parseInstalledPackagesFromLocalDb*(
   ## Builds an installed-package set directly from pacman's local database.
   ##
   ## Each installed package has a `desc` file containing a `%NAME%` marker
-  ## followed by the package name. Entries without a readable name are skipped
-  ## so callers can fall back to `pacman -Q` when the database is unavailable or
-  ## unexpectedly malformed.
+  ## followed by the package name. The parser opens the expected `desc` path
+  ## directly instead of probing with an extra `stat`; unreadable or malformed
+  ## entries are skipped so callers can fall back to `pacman -Q` when the local
+  ## database is unavailable.
   result = initTable[string, bool](2048)
   if not dirExists(localDbPath):
     return
@@ -41,13 +42,10 @@ proc parseInstalledPackagesFromLocalDb*(
     if kind notin {pcDir, pcLinkToDir}:
       continue
     let descPath = pkgDir / "desc"
-    if not fileExists(descPath):
-      continue
 
     var wantName = false
     try:
-      for rawLine in lines(descPath):
-        let line = rawLine.strip()
+      for line in lines(descPath):
         if wantName:
           if line.len > 0:
             result[line] = true
