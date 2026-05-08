@@ -1,6 +1,6 @@
 # Package
 
-version = "0.7.0"
+version = "0.7.1"
 author = "Gabriel Capilla"
 description = "Terminal UI for pacman, AUR & nimble"
 license = "GNU AGPLv3"
@@ -30,7 +30,6 @@ proc assertNoForbiddenX86Instructions(binaryPath: string) =
       quit("ERROR: " & binaryPath & " contains non-baseline x86 instructions.", 1)
 
 task native, "Build hyper-optimized local binary for this machine":
-  mkDir "bin"
   exec "nim compile -d:release --nimcache:nimcache/release-native --passC:-march=native -o:parun src/parun.nim"
 
 task baseline_x86_64_v3, "Build optimized GitHub Release binary for x86-64-v3 CPUs":
