@@ -87,6 +87,29 @@ Result:
   40 iterations. Best observed gain against the initial run: 2.388 ms,
   about 12.0%.
 
+## Step 5: statx Installed-State Freshness Checks
+
+Target: `src/storage/index_builder.nim`.
+
+Status: implemented.
+
+Result:
+
+- Added a Linux `statx` wrapper for mtime-only metadata reads with
+  `AT_STATX_DONT_SYNC`, `AT_NO_AUTOMOUNT`, and a stdlib fallback.
+- Applied it only to installed-state freshness checks, where parun compares
+  package-manager state mtimes against `.prix` index mtimes before deciding
+  whether to rebuild indexes.
+- Added `benchmarks/bench_statx_mtime.nim` to compare stdlib
+  `getLastModificationTime` scanning with `statx` scanning on the same
+  directory.
+- Parity check on `/var/lib/pacman/local`: stdlib and `statx` returned the same
+  newest mtime (`1778235558862441391` ns).
+- Final benchmark over 60 iterations:
+  - stdlib newest-mtime scan: 6.412 ms average.
+  - `statx` newest-mtime scan: 6.065 ms average.
+  - Gain: 0.347 ms, about 5.4%.
+
 ## Deferred
 
 - `getdents64`: rejected for now. Local benchmark showed directory iteration is

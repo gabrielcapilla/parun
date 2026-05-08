@@ -10,6 +10,7 @@
 import std/[os, osproc, streams, strutils, tables, times]
 import indexes
 import ../plugins/[cache, pacman]
+import ../utils/linux_statx
 
 const
   RuntimeRefreshLockFile = ".indexes.refresh.lock"
@@ -37,36 +38,53 @@ proc runtimeIndexMaxAgeSeconds(): int64 =
   except ValueError:
     defaultSeconds
 
-proc newestEntryMTime(dirPath: string): Time =
-  ## Directory mtime can miss metadata rewrites on some filesystems; scan one level.
-  if not dirExists(dirPath):
-    return Time()
-  result = getLastModificationTime(dirPath)
+proc pathMTimeUnixNs(path: string): int64 =
+  when defined(linux):
+    let statxTime = statxMTimeUnixNs(path)
+    if statxTime.ok:
+      return statxTime.ns
+  try:
+    let fallbackTime = getLastModificationTime(path)
+    fallbackTime.toUnix() * 1_000_000_000'i64 + int64(fallbackTime.nanosecond)
+  except CatchableError:
+    0'i64
+
+proc newestEntryMTimeNs(dirPath: string): int64 =
+  ## Returns newest mtime for a directory and its first-level entries.
+  ##
+  ## Directory mtime can miss metadata rewrites on some filesystems, so
+  ## installed-state invalidation scans one level. Linux uses `statx` with a
+  ## portable stdlib fallback; missing/unreadable paths return zero and do not
+  ## force an index rebuild.
+  result = pathMTimeUnixNs(dirPath)
+  if result == 0:
+    return
   try:
     for kind, path in walkDir(dirPath):
       if kind in {pcFile, pcDir, pcLinkToFile, pcLinkToDir}:
-        let mtime = getLastModificationTime(path)
+        let mtime = pathMTimeUnixNs(path)
         if mtime > result:
           result = mtime
   except CatchableError:
     discard
 
-proc installedStateMTime(source: IndexedSourceKind): Time =
+proc installedStateMTimeNs(source: IndexedSourceKind): int64 =
   ## Installed flags are embedded in indexes; rebuild when local install DB changed.
   case source
   of iskSystem, iskAur:
-    newestEntryMTime("/var/lib/pacman/local")
+    newestEntryMTimeNs("/var/lib/pacman/local")
   of iskNimble:
     let nimbleDir = getHomeDir() / ".nimble"
     let pkgs2 = nimbleDir / "pkgs2"
     let pkgs = nimbleDir / "pkgs"
-    max(newestEntryMTime(pkgs2), newestEntryMTime(pkgs))
+    max(newestEntryMTimeNs(pkgs2), newestEntryMTimeNs(pkgs))
 
 proc installedStateChangedSince(source: IndexedSourceKind, indexPath: string): bool =
-  let stateTime = installedStateMTime(source)
-  if stateTime == Time():
+  let stateTime = installedStateMTimeNs(source)
+  if stateTime == 0:
     return false
-  stateTime > getLastModificationTime(indexPath)
+  let indexTime = pathMTimeUnixNs(indexPath)
+  indexTime > 0 and stateTime > indexTime
 
 proc shellQuote(value: string): string =
   result = "'"
