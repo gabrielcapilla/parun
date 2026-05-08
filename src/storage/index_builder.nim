@@ -158,10 +158,14 @@ proc streamJsonIntoIndex(
     raise newException(IOError, "failed to parse metadata JSON: " & jsonPath)
 
 proc loadInstalledMap(): Table[string, bool] =
+  result = parseInstalledPackagesFromLocalDb()
+  if result.len > 0:
+    return
+
   let (output, exitCode) = execCmdEx("pacman -Q")
   if exitCode != 0:
     raise newException(IOError, "failed to collect installed package map")
-  parseInstalledPackages(output)
+  result = parseInstalledPackages(output)
 
 proc buildSystemIndex(
     builder: var SourceIndexBuilder, installedMap: Table[string, bool]

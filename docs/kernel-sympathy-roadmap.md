@@ -1,0 +1,76 @@
+# Kernel Sympathy Roadmap
+
+This roadmap keeps Linux-specific optimization behind empirical gates. Each
+step must preserve existing behavior, compile cleanly, and show benchmark data
+before it is considered complete.
+
+## Gate Commands
+
+Run after every implementation step:
+
+```bash
+nim r --hints:off tests/test_nimble_info.nim
+nim r --hints:off tests/test_wrap_text.nim
+nimble build --hints:off
+nimble baseline_x86_64
+```
+
+## Step 1: Advise Mapped `.prix` Indexes
+
+Target: `src/storage/source_index_runtime.nim`.
+
+Status: rejected after benchmark.
+
+Result:
+
+- Candidate patch called Linux `madvise` after mapping a validated `.prix`.
+- Warm-index microbenchmark regressed slightly: 322,374 ns/open baseline vs
+  328,237 ns/open with advice on `merged.system-aur-nimble.prix`.
+- Minor faults were effectively unchanged: 99,011 baseline vs 99,009 with
+  advice.
+- Patch was removed. Do not reintroduce without a cold-cache benchmark that
+  shows a net win.
+
+## Step 2: Direct Installed Pacman State
+
+Target: installed package map currently sourced through `pacman -Q`.
+
+Status: implemented.
+
+Result:
+
+- Parses `/var/lib/pacman/local/<pkg-version>/desc` directly.
+- Keeps `pacman -Q` fallback when local DB parsing returns no entries.
+- Installed package parity on this machine: `pacman -Q` count 2269, local
+  `desc` count 2269, missing 0, extra 0.
+- System index refresh benchmark, seven rounds:
+  - Baseline median: 322.180 ms.
+  - Direct local DB median: 282.791 ms.
+  - Median gain: 39.389 ms, 12.23%.
+
+## Step 3: pidfd Transaction Supervision
+
+Target: external install/remove process tracking.
+
+Plan:
+
+- Keep process execution behavior unchanged.
+- Add Linux `pidfd_open` when available.
+- Integrate pidfd with selector/worker event flow only after measuring current
+  blocking points.
+- Fall back to current process handling on older kernels.
+
+Evidence:
+
+- Transaction tests/manual dry run.
+- No PID reuse assumptions in monitoring path.
+- No UI regression under long-running package command.
+
+## Deferred
+
+- `getdents64`: only after direct pacman DB parsing shows directory iteration
+  is still hot.
+- `io_uring`: defer; mmap plus `madvise` is lower risk and fits current design.
+- `eventfd`: defer until channel wakeups are measured as a bottleneck.
+- `memfd_create`: defer; parun benefits from durable metadata/index caches.
+- `process_vm_readv`: reject for now; too brittle and unnecessary.
