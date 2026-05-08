@@ -4,7 +4,7 @@
 ## - Owns worker-thread lifecycle and request dispatch wiring.
 ## - Validates transaction package names before shell execution.
 ## - Routes install/remove to a source-appropriate plugin contract.
-import std/[osproc, strutils]
+import std/[osproc, posix, strutils]
 import ../core/types
 import worker_types, worker
 import registry
@@ -14,6 +14,45 @@ const
   ValidPkgNameChars = {'a' .. 'z', 'A' .. 'Z', '0' .. '9', '-', '.', '+', '_', '@'}
   ValidRepoChars = {'a' .. 'z', 'A' .. 'Z', '0' .. '9', '-', '_', '.'}
   MaxPkgNameLen = 256
+
+type TransactionCommand* = object
+  exe*: string
+  args*: seq[string]
+
+when defined(linux):
+  const
+    SysPidfdOpen = 434.clong
+    PollIn = 0x001.cshort
+
+  type PollFd {.importc: "struct pollfd", header: "<poll.h>".} = object
+    fd: cint
+    events: cshort
+    revents: cshort
+
+  proc syscall(number: clong): clong {.importc, header: "<unistd.h>", varargs.}
+
+  proc poll(fds: ptr PollFd, nfds: culong, timeout: cint): cint {.
+    importc, header: "<poll.h>"
+  .}
+
+  proc pidfdOpen(pid: cint): cint {.inline.} =
+    cint(syscall(SysPidfdOpen, pid, 0.cuint))
+
+  proc waitPidfdReadable(pidfd: cint) =
+    if pidfd < 0:
+      return
+    var fd = PollFd(fd: pidfd, events: PollIn, revents: 0)
+    while true:
+      let ready = poll(addr fd, 1.culong, -1)
+      if ready > 0:
+        break
+      if ready < 0 and errno == EINTR:
+        continue
+      break
+else:
+  proc pidfdOpen(pid: cint): cint {.inline.} = -1
+  proc waitPidfdReadable(pidfd: cint) {.inline.} =
+    discard
 
 proc isValidPackageName*(name: string): bool =
   ## Validates package name to prevent command injection
@@ -168,11 +207,26 @@ proc pollWorkerMessages*(messages: var seq[Msg]) =
       break
     messages.add(msg)
 
-func buildCmd*(tool: PkgManagerType, op: string, targets: seq[string]): string =
-  ## Builds process command line from plugin contract + operation + targets.
+func buildTransactionCommand*(
+    tool: PkgManagerType, op: string, targets: seq[string]
+): TransactionCommand =
+  ## Builds argv form for a package transaction without shell interpretation.
   let def = getToolDef(tool)
-  let prefix = if def.sudo: "sudo " else: ""
-  result = prefix & def.bin & op & targets.join(" ")
+  let opParts = op.splitWhitespace()
+  if def.sudo:
+    result.exe = "sudo"
+    result.args = @[def.bin] & opParts & targets
+  else:
+    result.exe = def.bin
+    result.args = opParts & targets
+
+func buildCmd*(tool: PkgManagerType, op: string, targets: seq[string]): string =
+  ## Builds display-only transaction command line from plugin contract + targets.
+  let cmd = buildTransactionCommand(tool, op, targets)
+  result = cmd.exe
+  if cmd.args.len > 0:
+    result.add(' ')
+    result.add(cmd.args.join(" "))
 
 proc runTransaction*(tool: PkgManagerType, targets: seq[string], install: bool): int =
   ## Executes install/uninstall transaction for selected plugin.
@@ -184,8 +238,16 @@ proc runTransaction*(tool: PkgManagerType, targets: seq[string], install: bool):
   else:
     enforceCapabilities(def, {capUninstall}, "uninstall transaction")
   let op = if install: def.installCmd else: def.uninstallCmd
-  let cmd = buildCmd(tool, op, targets)
-  return execCmd(cmd)
+  let cmd = buildTransactionCommand(tool, op, targets)
+  var process = startProcess(
+    cmd.exe, args = cmd.args, options = {poUsePath, poParentStreams}
+  )
+  let pidfd = pidfdOpen(cint(process.processID))
+  if pidfd >= 0:
+    waitPidfdReadable(pidfd)
+    discard close(pidfd)
+  result = waitForExit(process)
+  close(process)
 
 proc installPackages*(names: seq[string], source: DataSource): int =
   ## Installs packages with validation to prevent command injection

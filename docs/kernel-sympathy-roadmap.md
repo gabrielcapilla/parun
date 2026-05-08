@@ -52,19 +52,18 @@ Result:
 
 Target: external install/remove process tracking.
 
-Plan:
+Status: implemented.
 
-- Keep process execution behavior unchanged.
-- Add Linux `pidfd_open` when available.
-- Integrate pidfd with selector/worker event flow only after measuring current
-  blocking points.
-- Fall back to current process handling on older kernels.
+Result:
 
-Evidence:
-
-- Transaction tests/manual dry run.
-- No PID reuse assumptions in monitoring path.
-- No UI regression under long-running package command.
+- Transaction commands now use `startProcess` with argv instead of shell
+  command strings.
+- Linux path opens a pidfd for the child process and waits for that exact fd to
+  become readable before reaping through Nim's process handle.
+- Non-Linux or unsupported-kernel path falls back to the normal process wait.
+- pidfd smoke test on this kernel returned fd `3`.
+- Added tests for pacman/nimble transaction argv construction and shell
+  metacharacter rejection.
 
 ## Deferred
 
