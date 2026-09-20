@@ -1,6 +1,6 @@
 # Package
 
-version = "0.7.1"
+version = "0.7.2"
 author = "Gabriel Capilla"
 description = "Terminal UI for pacman, AUR & nimble"
 license = "GNU AGPLv3"

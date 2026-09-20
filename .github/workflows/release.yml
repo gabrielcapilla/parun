@@ -1,0 +1,248 @@
+name: release
+
+"on":
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: build release assets
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check package version
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -Eeuo pipefail
+          expected="${RELEASE_TAG#v}"
+          [[ "${expected}" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]] || {
+            echo "invalid release tag: ${RELEASE_TAG}" >&2
+            exit 1
+          }
+
+          actual="$(sed -n 's/^version[[:space:]]*=[[:space:]]*"\([^\"]*\)".*/\1/p' parun.nimble)"
+          [[ -n "${actual}" ]] || { echo "could not read parun.nimble version" >&2; exit 1; }
+          [[ "${actual}" == "${expected}" ]] || {
+            echo "parun.nimble version ${actual} does not match tag ${RELEASE_TAG}" >&2
+            exit 1
+          }
+      - name: Set up Nim
+        uses: jiro4989/setup-nim-action@v2
+        with:
+          nim-version: '2.2.12'
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build release assets
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          nimble check
+          nimble baseline_x86_64
+          nimble baseline_x86_64_v3
+      - name: Verify release assets
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -Eeuo pipefail
+          expected=(
+            parun-linux-x86_64
+            parun-linux-x86_64-v3
+          )
+          mapfile -t actual < <(
+            find bin -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | sort
+          )
+          diff -u \
+            <(printf '%s\n' "${expected[@]}" | sort) \
+            <(printf '%s\n' "${actual[@]}")
+
+          version="${RELEASE_TAG#v}"
+          for asset in "${expected[@]}"; do
+            path="bin/${asset}"
+            test -s "${path}"
+            test -x "${path}"
+            bytes="$(wc -c <"${path}")"
+            ((bytes <= 67108864)) || {
+              echo "${asset} exceeds the 64 MiB installer limit" >&2
+              exit 1
+            }
+            file -b "${path}" | grep -q 'ELF 64-bit'
+            readelf -h "${path}" | grep -q 'Class:[[:space:]]*ELF64'
+            output="$("${path}" --version 2>&1 | sed $'s/\033\\[[0-9;]*m//g')"
+            [[ "${output}" == *" ${version}" ]] || {
+              echo "${asset} reported unexpected version: ${output}" >&2
+              exit 1
+            }
+          done
+
+      - name: Upload baseline artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: parun-linux-x86_64
+          path: bin/parun-linux-x86_64
+          if-no-files-found: error
+
+      - name: Upload x86-64-v3 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: parun-linux-x86_64-v3
+          path: bin/parun-linux-x86_64-v3
+          if-no-files-found: error
+
+  publish:
+    name: publish release
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      actions: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: parun-linux-x86_64*
+          path: release
+          merge-multiple: true
+
+      - name: Verify build artifact set
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          expected=(
+            parun-linux-x86_64
+            parun-linux-x86_64-v3
+          )
+          mapfile -t actual < <(
+            find release -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | sort
+          )
+          diff -u \
+            <(printf '%s\n' "${expected[@]}" | sort) \
+            <(printf '%s\n' "${actual[@]}")
+
+      - name: Generate manifest
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ github.ref_name }}
+        run: |
+          set -Eeuo pipefail
+          version="${RELEASE_VERSION#v}"
+          bash ci/manifest.sh \
+            parun \
+            "${version}" \
+            parun \
+            release/install.manifest \
+            "linux|x86_64|baseline|parun-linux-x86_64|release/parun-linux-x86_64" \
+            "linux|x86_64|x86-64-v3|parun-linux-x86_64-v3|release/parun-linux-x86_64-v3"
+
+      - name: Create draft release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -Eeuo pipefail
+          if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
+            is_draft="$(gh release view "${RELEASE_TAG}" --json isDraft --template '{{.isDraft}}')"
+            if [[ "${is_draft}" != "true" ]]; then
+              echo "release ${RELEASE_TAG} already exists and is published" >&2
+              exit 1
+            fi
+          else
+            gh release create "${RELEASE_TAG}" \
+              --draft \
+              --title "${RELEASE_TAG}" \
+              --notes "Automated parun release."
+          fi
+
+      - name: Upload release assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -Eeuo pipefail
+          gh release upload "${RELEASE_TAG}" \
+            release/install.manifest \
+            release/parun-linux-x86_64 \
+            release/parun-linux-x86_64-v3 \
+            --clobber
+
+      - name: Verify published release asset set
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -Eeuo pipefail
+          expected=(
+            parun-linux-x86_64
+            parun-linux-x86_64-v3
+            install.manifest
+          )
+          mapfile -t actual < <(
+            gh release view "${RELEASE_TAG}" \
+              --json assets \
+              --template '{{range .assets}}{{.name}}{{"\n"}}{{end}}' |
+              sort
+          )
+          diff -u \
+            <(printf '%s\n' "${expected[@]}" | sort) \
+            <(printf '%s\n' "${actual[@]}")
+
+      - name: Download and verify published assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -Eeuo pipefail
+          rm -rf verify
+          mkdir -p verify
+          gh release download "${RELEASE_TAG}" \
+            --pattern install.manifest \
+            --pattern parun-linux-x86_64 \
+            --pattern parun-linux-x86_64-v3 \
+            --dir verify \
+            --clobber
+          expected=(
+            parun-linux-x86_64
+            parun-linux-x86_64-v3
+            install.manifest
+          )
+          mapfile -t actual < <(
+            find verify -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | sort
+          )
+          diff -u \
+            <(printf '%s\n' "${expected[@]}" | sort) \
+            <(printf '%s\n' "${actual[@]}")
+          version="${RELEASE_TAG#v}"
+          bash ci/manifest.sh \
+            parun \
+            "${version}" \
+            parun \
+            verify/recomputed.manifest \
+            "linux|x86_64|baseline|parun-linux-x86_64|verify/parun-linux-x86_64" \
+            "linux|x86_64|x86-64-v3|parun-linux-x86_64-v3|verify/parun-linux-x86_64-v3"
+          cmp -- verify/install.manifest verify/recomputed.manifest
+
+      - name: Publish release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: gh release edit "${RELEASE_TAG}" --draft=false
