@@ -1,7 +1,14 @@
 import std/[os, tables, unittest]
-import ../src/plugins/pacman
+import ../src/sources/pacman
 
 suite "pacman local database parsing":
+  test "extracts package names directly from query output":
+    let installed = parseInstalledPackages("alpha 1.0\n  beta 2.0\n\nno-version\n")
+    check installed.len == 3
+    check installed.hasKey("alpha")
+    check installed.hasKey("beta")
+    check installed.hasKey("no-version")
+
   test "reads installed package names from desc files":
     let root = getTempDir() / "parun-pacman-local-test"
     removeDir(root)

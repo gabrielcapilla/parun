@@ -16,6 +16,10 @@ nimble.paths
 *.nimble_link
 nimble.develop
 
+# Standalone test binaries
+tests/test_*
+!tests/test_*.nim
+
 # Binary
 parun
 
@@ -26,11 +30,18 @@ docs/
 dist/
 tools/
 schemas/
-.minerva/
+
+# Maintained repository guides
+!docs/
+docs/*
+!docs/architecture.md
+!docs/development.md
+!docs/version-0.8.0-review.md
 
 # Files
 *.zip
 *.tar.gz
+AGENTS.md
 RESUME.md
 ROADMAP.json
 roadmap.json

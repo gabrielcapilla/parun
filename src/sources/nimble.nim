@@ -1,0 +1,240 @@
+import std/[strutils]
+
+const
+  NimbleRawBranches = ["master", "main"]
+  NimbleDetailFormatVersion* = "nimble-manifest-v4"
+
+type NimblePackageInfo = object
+  name: string
+  version: string
+  description: string
+  author: string
+  license: string
+  url: string
+  requires: seq[string]
+
+func stripVcsSuffix(value: string): string =
+  result = value.strip()
+  var last = result.len
+  while last > 0 and result[last - 1] == '/':
+    dec last
+  if last != result.len:
+    result.setLen(last)
+  if result.endsWith(" (git)") or result.endsWith(" (hg)"):
+    result.setLen(result.len - 6)
+  if result.endsWith(".git"):
+    result.setLen(result.len - 4)
+
+func getRawBaseUrl*(repoUrl: string): string {.noSideEffect.} =
+  let cleanUrl = repoUrl.stripVcsSuffix()
+  if cleanUrl.len == 0:
+    return ""
+
+  if "github.com" in cleanUrl:
+    return cleanUrl.replace("github.com", "raw.githubusercontent.com")
+  if "gitlab.com" in cleanUrl:
+    return cleanUrl & "/-/raw"
+  if "codeberg.org" in cleanUrl:
+    return cleanUrl & "/raw/branch"
+  return ""
+
+func addNimbleFileNames(dst: var seq[string], pkgName: string) =
+  dst.add(pkgName & ".nimble")
+  let lowerName = pkgName.toLowerAscii()
+  if lowerName != pkgName:
+    dst.add(lowerName & ".nimble")
+
+func getRawNimbleFileCandidatesWithBranch*(
+    repoUrl, pkgName: string
+): seq[(string, string)] {.noSideEffect.} =
+  result = @[]
+  let base = getRawBaseUrl(repoUrl)
+  if base.len == 0 or pkgName.len == 0:
+    return result
+
+  var files = newSeqOfCap[string](2)
+  files.addNimbleFileNames(pkgName)
+
+  for branch in NimbleRawBranches:
+    for fileName in files:
+      if "raw.githubusercontent.com" in base:
+        result.add((branch, base & "/refs/heads/" & branch & "/" & fileName))
+      result.add((branch, base & "/" & branch & "/" & fileName))
+
+func getRawNimbleFileCandidates*(
+    repoUrl, pkgName: string
+): seq[string] {.noSideEffect.} =
+  result = @[]
+  for (branch, url) in getRawNimbleFileCandidatesWithBranch(repoUrl, pkgName):
+    result.add(url)
+
+func orderCandidatesByBranch*(
+    candidates: seq[(string, string)], knownBranch: string
+): seq[(string, string)] {.noSideEffect.} =
+  if knownBranch.len == 0:
+    return candidates
+  result = newSeqOfCap[(string, string)](candidates.len)
+  for entry in candidates:
+    if entry[0] == knownBranch:
+      result.add(entry)
+  for entry in candidates:
+    if entry[0] != knownBranch:
+      result.add(entry)
+
+func cacheKeyForRepo*(repoUrl: string): string {.noSideEffect.} =
+  getRawBaseUrl(repoUrl)
+
+func unquoteValue(value: string): string =
+  result = value.strip()
+  if result.len >= 2:
+    let first = result[0]
+    let last = result[^1]
+    if (first == '"' and last == '"') or (first == '\'' and last == '\''):
+      result = result[1 ..^ 2]
+
+func startsWithAsciiNoCase(value, prefix: string): bool {.inline.} =
+  if value.len < prefix.len:
+    return false
+  for i in 0 ..< prefix.len:
+    if value[i].toLowerAscii() != prefix[i]:
+      return false
+  true
+
+func isRequiresDecl(value: string): bool {.inline.} =
+  value.startsWithAsciiNoCase("requires") and
+    (value.len == 8 or value[8] in {' ', '\t', ':'})
+
+func addRequires(info: var NimblePackageInfo, rawValue: string) =
+  var rest = rawValue.strip()
+  if rest.startsWith("(") and rest.endsWith(")"):
+    rest = rest[1 ..^ 2]
+  for part in rest.split(','):
+    let dep = part.unquoteValue()
+    if dep.len > 0:
+      info.requires.add(dep)
+
+func parseNimbleFile(raw, name, repoUrl: string): NimblePackageInfo =
+  result.name = name
+  result.url = repoUrl.stripVcsSuffix()
+  result.requires = newSeqOfCap[string](16)
+
+  for line in raw.splitLines():
+    var first = 0
+    while first < line.len and line[first] in {' ', '\t', '\r'}:
+      inc first
+    if first == line.len or line[first] == '#':
+      continue
+
+    let cleaned = line[first ..^ 1].strip()
+    if cleaned.isRequiresDecl():
+      let rawRequires =
+        if ':' in cleaned:
+          cleaned.split(':', 1)[1]
+        elif cleaned.len > 8:
+          cleaned[8 ..^ 1]
+        else:
+          ""
+      result.addRequires(rawRequires)
+      continue
+
+    if '=' notin cleaned:
+      continue
+    let parts = cleaned.split('=', 1)
+    let key = parts[0].strip().toLowerAscii()
+    let val = parts[1].unquoteValue()
+    case key
+    of "version":
+      result.version = val
+    of "description":
+      result.description = val
+    of "author":
+      result.author = val
+    of "license", "licenses":
+      result.license = val
+    else:
+      discard
+
+func addField(dst: var string, key, value: string) =
+  if value.len > 0:
+    dst.add(key)
+    dst.add(" : ")
+    dst.add(value)
+    dst.add('\n')
+
+func addRequiredField(dst: var string, key, value: string) =
+  dst.add(key)
+  dst.add(" : ")
+  dst.add(value)
+  dst.add('\n')
+
+func formatRepositoryNimbleInfo(info: NimblePackageInfo): string =
+  result = newStringOfCap(384)
+  result.addRequiredField("Repository     ", "nimble")
+  result.addRequiredField("Name           ", info.name)
+  result.addRequiredField("Version        ", info.version)
+  result.addRequiredField("Description    ", info.description)
+  result.addRequiredField("URL            ", info.url)
+  result.addRequiredField("Licenses       ", info.license)
+  result.addRequiredField("Author         ", info.author)
+  result.addRequiredField("Depends On     ", info.requires.join(", "))
+
+func formatRegistryNimbleInfo*(
+    name, version, repoUrl, description, license, web: string
+): string {.noSideEffect.} =
+  var info = NimblePackageInfo(
+    name: name,
+    version: if version.len > 0: version else: "git",
+    description: description,
+    license: license,
+    url: repoUrl.stripVcsSuffix(),
+    requires: newSeqOfCap[string](0),
+  )
+  if info.url.len == 0:
+    info.url = web.strip()
+  info.formatRepositoryNimbleInfo()
+
+func formatFallbackNimbleInfo(info: NimblePackageInfo): string =
+  result = newStringOfCap(256)
+  result.addField("Repository     ", "nimble")
+  result.addField("Name           ", info.name)
+  result.addField("Description    ", info.description)
+  result.addField("URL            ", info.url)
+  result.addField("Licenses       ", info.license)
+
+func parseNimbleInfo*(
+    raw, name, url: string, tagsLine: string
+): string {.noSideEffect.} =
+  discard tagsLine
+  parseNimbleFile(raw, name, url).formatRepositoryNimbleInfo()
+
+func parseNimbleInfo*(
+    raw, name, url: string, tags: seq[string]
+): string {.noSideEffect.} =
+  discard tags
+  parseNimbleFile(raw, name, url).formatRepositoryNimbleInfo()
+
+func formatFallbackInfo*(raw: string): string {.noSideEffect.} =
+  var info = NimblePackageInfo(requires: newSeqOfCap[string](0))
+  for line in raw.splitLines():
+    let stripped = line.strip()
+    if stripped.len == 0:
+      continue
+    if not line.startsWith(" ") and stripped.endsWith(":"):
+      info.name = stripped[0 ..^ 2]
+      continue
+    if ':' notin stripped:
+      continue
+    let parts = stripped.split(':', 1)
+    let key = parts[0].strip().toLowerAscii()
+    let val = parts[1].strip()
+    case key
+    of "url":
+      info.url = val.stripVcsSuffix()
+    of "description":
+      info.description = val
+    of "license":
+      info.license = val
+    else:
+      discard
+
+  result = info.formatFallbackNimbleInfo()

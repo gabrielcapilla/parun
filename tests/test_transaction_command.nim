@@ -1,6 +1,6 @@
 import std/unittest
-import ../src/plugins/contracts
-import ../src/plugins/manager
+import ../src/sources/source_contracts
+import ../src/sources/package_manager
 
 suite "transaction command construction":
   test "pacman install uses sudo argv without shell joining":
@@ -16,5 +16,9 @@ suite "transaction command construction":
   test "package validation rejects shell metacharacters":
     check isValidPackageName("extra/git")
     check isValidPackageName("nimble_pkg-1.2+dev")
-    check not isValidPackageName("git;rm")
-    check not isValidPackageName("extra/git && echo bad")
+    for invalid in [
+      "", "/git", "extra/", "git;rm", "git|rm", "git&rm", "git$HOME", "git`id`",
+      "git'quoted'", "git\"quoted\"", "git\nrm", "git\rrm", "git<file>", "git>file",
+      "git(pkg)", "extra/git && echo bad", "..", "extra/..", "repo/pkg/other",
+    ]:
+      check not isValidPackageName(invalid)

@@ -1,15 +1,7 @@
-## UI component rendering.
-## Split from tui.nim to keep modules manageable.
-##
-## Notes:
-## - Consumes immutable index views + `AppState` to build one terminal frame.
-## - Rendering is string-buffer based; no direct per-cell terminal writes.
-## - Details panel uses cache-first policy and displays lightweight loading marker on misses.
-
 import std/[monotimes, strutils, times, unicode]
-import ../core/[types, state]
-import ../storage/indexes
-import ../utils/utils
+import ../catalog/[model, state]
+import ../index/indexes
+import text_layout
 
 const
   MinTermWidth* = 80
@@ -33,7 +25,6 @@ const
   Spaces50* = "                                                  "
 
 proc appendSpaces*(buffer: var string, count: int) =
-  ## Fast-path space append using 50-char chunk constant.
   var p = count
   while p >= 50:
     buffer.add(Spaces50)
@@ -48,7 +39,9 @@ proc appendRow*(
     width: int,
     isCursor, isSelected: bool,
 ) =
-  ## Renders a single row of the package list.
+  if ensureRepoSections(view).len > 0 or ensureVersionSections(view).len > 0:
+    buffer.appendSpaces(width)
+    return
   let i = int(idx)
   let isInstalled = isInstalled(view, i)
   let tagW = if isInstalled: InstalledLen else: 0
@@ -132,7 +125,6 @@ proc appendRow*(
 proc loadingIndicatorLine(
     width: int, row: int, phase: int, style: DetailAnimationStyle
 ): string =
-  ## Minimal loading placeholder in details panel.
   if width <= 0:
     return ""
 
@@ -162,7 +154,6 @@ proc loadingIndicatorLine(
   return ""
 
 func scrambleRank(seed: uint32, pos: int): uint32 {.inline.} =
-  ## Stable per-cell rank: avoids storing/shuffling indices in the render loop.
   var x = seed xor uint32(pos * 0x45d9f3b)
   x = (x xor (x shr 16)) * 0x7feb352d'u32
   x = (x xor (x shr 15)) * 0x846ca68b'u32
@@ -224,7 +215,6 @@ proc scrambledDetailLine(
 proc renderDetails*(
     buffer: var string, state: var AppState, r, listH, detailTextW: int
 ) =
-  ## Renders the side details panel with dynamic text wrapping.
   if r == 0:
     buffer.add(ColorFrame)
     buffer.add(BoxTopLeft)
@@ -250,7 +240,7 @@ proc renderDetails*(
       if detailCacheHas(state.detailsCache, curIdx):
         if contentRowIndex == 0:
           state.perf.coldDetailCacheHits.inc()
-        # Update wrapping cache if needed
+
         if state.lastDetailIdx != curIdx or state.lastDetailWidth != detailTextW:
           let rawContent = detailCacheGet(state.detailsCache, curIdx)
           state.wrappedDetails = wrapText(rawContent, detailTextW)
@@ -307,12 +297,11 @@ proc renderStatusBar*(
     statusMessage, searchBuffer: string,
     searchCursor, termW: int,
 ): int =
-  ## Renders the bottom status and search bar.
   let visLenStr = $visibleCount
   let totalLenStr = $totalCount
   let pkgCountStrLen =
     if totalCount == 0:
-      5 # "(...)"
+      5
     else:
       2 + visLenStr.len + 1 + totalLenStr.len
 
@@ -349,7 +338,6 @@ proc renderStatusBar*(
   let rightSideLen = statusPrefixLen + modeStrLen + 1 + pkgCountStrLen
   let spacing = max(0, termW - leftSideLen - rightSideLen)
 
-  # Start building the status bar
   buffer.add(ColorPrompt)
   buffer.add(">")
   buffer.add(AnsiReset)
@@ -363,7 +351,6 @@ proc renderStatusBar*(
   buffer.add(statusMsgStr)
   buffer.add(" ")
 
-  # Pkg Count
   buffer.add(AnsiDim)
   buffer.add("(")
   if totalCount == 0:

@@ -1,23 +1,15 @@
-## Sets terminal to "raw" mode and handles SIGWINCH signal.
-##
-## Notes:
-## - Uses an internal pipe to forward async resize signals into selector loop.
-## - Switches to alternate screen buffer and restores terminal on exit.
-
 import std/[posix, termios]
-import ../core/types
+import ../catalog/model
 
 const SigWinchVal* = 28.cint
 
 var resizePipe*: array[2, cint]
 
 proc handleSigWinch*(sig: cint) {.noconv.} =
-  ## Signal handler: enqueue one-byte resize notification.
   var b: char = 'R'
   discard posix.write(resizePipe[1], addr b, 1)
 
 proc initTerminal*(): Termios =
-  ## Configures raw/non-blocking mode and returns original termios snapshot.
   if posix.pipe(resizePipe) != 0:
     quit("Critical Error: Could not create pipe for signals.")
 
@@ -37,12 +29,10 @@ proc initTerminal*(): Termios =
   var flags = fcntl(STDIN_FILENO, F_GETFL, 0)
   discard fcntl(STDIN_FILENO, F_SETFL, flags or O_NONBLOCK)
 
-  # Alt buffer + Hide cursor
   stdout.write("\e[?1049h\e[?25l")
   stdout.flushFile()
 
 proc restoreTerminal*(origTerm: var Termios) =
-  ## Restores canonical terminal state and closes resize pipe fds.
   stdout.write("\e[?1049l\e[?25h" & AnsiReset)
   discard tcSetAttr(STDIN_FILENO, TCSAFLUSH, addr origTerm)
 

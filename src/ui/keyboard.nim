@@ -1,17 +1,13 @@
-## Reads raw bytes from STDIN in non-blocking mode and parses ANSI escape sequences.
-
 import std/[posix]
-import ../core/types
+import ../catalog/model
 
 func readByte*(): int =
-  ## Reads one byte from stdin, returning `-1` when no byte is available.
   var b: char
   if posix.read(STDIN_FILENO, addr b, 1) == 1:
     return ord(b)
   return -1
 
 func parseCsiSequence*(): char =
-  ## Parses `ESC [` control-sequence introducer payload into internal key code.
   let b3 = readByte()
   if b3 == -1:
     return KeyEsc
@@ -97,7 +93,6 @@ func parseCsiSequence*(): char =
     return KeyNull
 
 func parseSs3Sequence*(): char =
-  ## Parses `ESC O` SS3 sequence payload into internal key code.
   let b3 = readByte()
   case b3
   of ord('P'):
@@ -116,7 +111,6 @@ func parseSs3Sequence*(): char =
     return KeyNull
 
 func parseSpecialKeySequence*(): char =
-  ## Parses escape-prefixed key sequence after first ESC byte.
   let b2 = readByte()
   if b2 == -1:
     return KeyEsc
@@ -133,11 +127,6 @@ func parseSpecialKeySequence*(): char =
       return char(b2)
 
 proc getKeyAsync*(): char =
-  ## Non-blocking key reader used by main UI loop.
-  var flags = fcntl(STDIN_FILENO, F_GETFL, 0)
-  let oldFlags = flags
-  discard fcntl(STDIN_FILENO, F_SETFL, flags or O_NONBLOCK)
-
   let b1 = readByte()
   var keyValue: char
 
@@ -160,5 +149,4 @@ proc getKeyAsync*(): char =
   else:
     keyValue = char(b1)
 
-  discard fcntl(STDIN_FILENO, F_SETFL, oldFlags)
   return keyValue

@@ -1,0 +1,148 @@
+import std/strutils
+import ../catalog/[model, state]
+import navigation
+
+func deleteCharLeft*(state: var AppState) =
+  if state.searchCursor > 0:
+    state.searchBuffer.delete(state.searchCursor - 1 .. state.searchCursor - 1)
+    state.searchCursor.dec()
+    state.cursor = 0
+
+func deleteWordLeft*(state: var AppState) =
+  if state.searchCursor == 0:
+    return
+
+  let originalCursor = state.searchCursor
+  let buffer = state.searchBuffer
+
+  var wordStart = originalCursor
+
+  while wordStart > 0:
+    dec(wordStart)
+    if buffer[wordStart] in {' ', '\t'}:
+      continue
+    else:
+      inc(wordStart)
+      break
+
+  while wordStart > 0:
+    let c = buffer[wordStart - 1]
+    if c in {
+      'a' .. 'z',
+      'A' .. 'Z',
+      '0' .. '9',
+      '_',
+      '+',
+      '-',
+      '*',
+      '/',
+      '=',
+      '<',
+      '>',
+      '!',
+      '@',
+      '#',
+      '$',
+      '%',
+      '^',
+      '&',
+      '~',
+      '`',
+      '?',
+      '.',
+      '=',
+    }:
+      dec(wordStart)
+    else:
+      break
+
+  if wordStart < originalCursor:
+    state.searchBuffer.delete(wordStart .. originalCursor - 1)
+    state.searchCursor = wordStart
+    state.cursor = 0
+
+func deleteCharRight*(state: var AppState) =
+  if state.searchCursor < state.searchBuffer.len:
+    state.searchBuffer.delete(state.searchCursor .. state.searchCursor)
+    state.cursor = 0
+
+func insertChar*(state: var AppState, c: char) =
+  if state.viewingSelection:
+    state.viewingSelection = false
+  state.searchBuffer.insert($c, state.searchCursor)
+  state.searchCursor.inc()
+  state.cursor = 0
+
+func moveCursorWordLeft*(state: var AppState) =
+  if state.searchCursor > 0:
+    while state.searchCursor > 0 and state.searchBuffer[state.searchCursor - 1] == ' ':
+      state.searchCursor.dec()
+
+    while state.searchCursor > 0 and state.searchBuffer[state.searchCursor - 1] != ' ':
+      state.searchCursor.dec()
+
+func moveCursorWordRight*(state: var AppState) =
+  var foundWord = false
+
+  while state.searchCursor < state.searchBuffer.len and
+      state.searchBuffer[state.searchCursor] == ' ':
+    state.searchCursor.inc()
+
+  while state.searchCursor < state.searchBuffer.len and
+      state.searchBuffer[state.searchCursor] != ' ':
+    state.searchCursor.inc()
+    foundWord = true
+
+  if not foundWord and state.searchCursor > 0:
+    while state.searchCursor > 0 and state.searchBuffer[state.searchCursor - 1] == ' ':
+      state.searchCursor.dec()
+
+proc handleInput*(state: var AppState, k: char, listHeight: int) =
+  case k
+  of KeyUp, KeyCtrlK:
+    if state.visibleCount() > 0:
+      state.cursor = min(state.visibleCount() - 1, state.cursor + 1)
+      state.detailScroll = 0
+  of KeyDown, KeyCtrlJ:
+    if state.visibleCount() > 0:
+      state.cursor = max(0, state.cursor - 1)
+      state.detailScroll = 0
+  of KeyPageUp:
+    if state.visibleCount() > 0:
+      state.cursor = min(state.visibleCount() - 1, state.cursor + listHeight)
+  of KeyPageDown:
+    if state.visibleCount() > 0:
+      state.cursor = max(0, state.cursor - listHeight)
+  of KeyBack, KeyBackspace:
+    if state.viewingSelection:
+      state.viewingSelection = false
+    deleteCharLeft(state)
+  of KeyEsc:
+    state.shouldQuit = true
+  of char(23), KeyAltBackspace:
+    if state.viewingSelection:
+      state.viewingSelection = false
+    deleteWordLeft(state)
+  of KeyDelete:
+    deleteCharRight(state)
+  of KeyLeft:
+    if state.searchCursor > 0:
+      state.searchCursor.dec()
+  of KeyRight:
+    if state.searchCursor < state.searchBuffer.len:
+      state.searchCursor.inc()
+  of KeyCtrlLeft:
+    moveCursorWordLeft(state)
+  of KeyCtrlRight:
+    moveCursorWordRight(state)
+  of KeyTab:
+    toggleSelectionAtCursor(state)
+  of KeyEnter:
+    state.shouldInstall = true
+  of KeyCtrlR:
+    state.shouldUninstall = true
+  else:
+    if k.ord >= 32 and k.ord <= 126:
+      insertChar(state, k)
+
+  updateNavigation(state, listHeight)
